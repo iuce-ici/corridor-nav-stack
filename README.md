@@ -32,3 +32,19 @@ Target for v1.0: 15 November 2026.
 
     colcon build
     source install/setup.bash
+
+## Environment
+
+Developed under WSL2 on Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic 8.11.0
+installed through the ROS vendor packages.
+
+OpenGL runs on Mesa llvmpipe software rendering. The host has an NVIDIA RTX
+3070 which is available for CUDA inside WSL, but the WSLg X server does not
+advertise DRI3, so the Mesa d3d12 driver falls back to software. Measured cost
+on an empty world: real time factor 1.0 headless, 0.9 with the GUI, and the
+bridged /clock topic arriving at 930 Hz against a 1 ms physics step with a
+6 ms worst case interval.
+
+No deliverable in this project depends on frame rate. Simulation time is
+decoupled from wall clock, and node compute time is measured on the node
+rather than end to end through the simulator.
