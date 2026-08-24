@@ -5,9 +5,9 @@ Corridor runs along +x. Centreline is y = 0. Floor is z = 0.
 Entrance is at x = 0.
 """
 
-WIDTH = 6.0
+WIDTH = 8.0
 LENGTH = 150.0
-HEIGHT = 6.0
+HEIGHT = 8.0
 WALL_THICKNESS = 0.2
 
 OUTPUT = "corridor.sdf"
