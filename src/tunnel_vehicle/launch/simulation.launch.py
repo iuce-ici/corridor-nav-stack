@@ -1,10 +1,12 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import IncludeLaunchDescription, TimerAction, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 import xacro
+from launch.substitutions import LaunchConfiguration
+
 
 
 def generate_launch_description():
@@ -24,6 +26,11 @@ def generate_launch_description():
         launch_arguments={'gz_args': f'-r -v 4 {world_path}'}.items(),
     )
 
+    spawn_y = LaunchConfiguration('y')
+    declare_y = DeclareLaunchArgument(
+        'y', default_value='0.0',
+        description='Lateral spawn offset from the corridor centreline, metres')
+
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -42,7 +49,7 @@ def generate_launch_description():
             '-world', 'corridor',
             '-topic', 'robot_description',
             '-name', 'vehicle',
-            '-x', '10.0', '-y', '0.0', '-z', '0.05',
+            '-x', '10.0', '-y', spawn_y, '-z', '0.05',
         ],
     )
 
@@ -60,6 +67,7 @@ def generate_launch_description():
     delayed_spawn = TimerAction(period=4.0, actions=[spawn])
 
     return LaunchDescription([
+        declare_y,
         gz_sim,
         robot_state_publisher,
         bridge,

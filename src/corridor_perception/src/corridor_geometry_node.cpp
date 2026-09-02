@@ -45,6 +45,7 @@ public:
     z_max_      = declare_parameter("z_max", 5.0);
     min_points_ = declare_parameter("min_points", 20);
     target_frame_ = declare_parameter("target_frame", std::string("base_link"));
+    reject_dist_ = declare_parameter("reject_dist", 0.30);
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -98,6 +99,40 @@ private:
     f.ok = true;
     return f;
   }
+  // Fit, reject points far from the fitted line, refit.
+  //
+  // One extra pass, not RANSAC. The wall points outnumber the
+  // contaminating near-field floor and ceiling arcs by roughly ten to one,
+  // so the first fit already sits close to the wall and a simple distance
+  // rejection separates them cleanly. RANSAC would be warranted if the
+  // outliers were a majority or adversarially placed; here they are neither.
+  LineFit fit_robust(const std::vector<double> & xs,
+                     const std::vector<double> & ys) const
+  {
+    const LineFit first = fit_line(xs, ys, min_points_);
+    if (!first.ok) { return first; }
+
+    // Perpendicular distance from a point to y = m*x + c is
+    // |m*x - y + c| / sqrt(1 + m^2).
+    const double norm = std::sqrt(1.0 + first.slope * first.slope);
+
+    std::vector<double> kx, ky;
+    kx.reserve(xs.size());
+    ky.reserve(ys.size());
+
+    for (size_t i = 0; i < xs.size(); ++i) {
+      const double d =
+        std::abs(first.slope * xs[i] - ys[i] + first.intercept) / norm;
+      if (d <= reject_dist_) {
+        kx.push_back(xs[i]);
+        ky.push_back(ys[i]);
+      }
+    }
+
+    LineFit second = fit_line(kx, ky, min_points_);
+    if (!second.ok) { return first; }   // rejected too much, keep pass one
+    return second;
+  }
 
   void on_cloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
@@ -127,8 +162,8 @@ private:
       else         { rx.push_back(x); ry.push_back(y); }
     }
 
-    const LineFit left  = fit_line(lx, ly, min_points_);
-    const LineFit right = fit_line(rx, ry, min_points_);
+    const LineFit left  = fit_robust(lx, ly);
+    const LineFit right = fit_robust(rx, ry);
 
     corridor_msgs::msg::CorridorGeometry out;
     out.header.stamp = msg->header.stamp;
@@ -171,6 +206,7 @@ private:
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
   double z_min_, z_max_;
+  double reject_dist_;
   int64_t min_points_;
   std::string target_frame_;
 };
