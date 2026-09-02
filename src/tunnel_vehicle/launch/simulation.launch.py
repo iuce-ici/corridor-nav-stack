@@ -50,12 +50,10 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         output='screen',
-        arguments=[
-            '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
-            '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
-            '/model/vehicle/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose',
-        ],
-        parameters=[{'use_sim_time': True}],
+        parameters=[{
+            'config_file': os.path.join(pkg_vehicle, 'config', 'bridge.yaml'),
+            'use_sim_time': True,
+        }],
     )
 
     # Gazebo needs a moment to come up before anything spawns into it.

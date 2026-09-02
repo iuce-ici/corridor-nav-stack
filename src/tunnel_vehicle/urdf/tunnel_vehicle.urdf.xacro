@@ -136,6 +136,22 @@
     <axis xyz="0 1 0"/>
   </joint>
 
+  <!-- IMU at the rear axle centre, 0.5 m above the floor. Colocated with
+       base_link in x and y so that measured yaw rate needs no lever-arm
+       correction. -->
+  <link name="imu_link">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="imu_link"/>
+    <origin xyz="0 0 0.5" rpy="0 0 0"/>
+  </joint>
+
   <gazebo>
     <plugin filename="gz-sim-ackermann-steering-system"
             name="gz::sim::systems::AckermannSteering">
@@ -169,6 +185,27 @@
       <use_pose_vector_msg>false</use_pose_vector_msg>
       <update_frequency>50</update_frequency>
     </plugin>
+  </gazebo>
+
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <topic>imu</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+      <imu>
+        <angular_velocity>
+          <z>
+            <noise type="none"/>
+          </z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x>
+            <noise type="none"/>
+          </x>
+        </linear_acceleration>
+      </imu>
+    </sensor>
   </gazebo>
 
   <gazebo>
