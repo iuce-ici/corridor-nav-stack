@@ -16,6 +16,29 @@
 // corridor there are no outliers. RANSAC goes in only if a least squares
 // fit is measured to be insufficient under noise, not before.
 
+// Known limitation: a wall ahead within the sensor's maximum range.
+//
+// The corridor's end cap is a large planar return spanning the full width
+// and lying inside the z band, so its points enter both wall fits. The
+// two-pass rejection removes many of them but is overwhelmed rather than
+// failing gracefully. Measured on a straight 130 m run at a 1.5 m lateral
+// offset, with a 30 m maximum range and the end wall at x = 150:
+//
+//   x from 10 to 115   mean offset error 0.44 mm, width error 0.47 mm,
+//                      constant along the corridor
+//   x from 115 to 128  mean offset error 104 mm, width error 290 mm
+//   x from 128 to 141  mean offset error 747 mm, width error 2204 mm
+//
+// Onset is at x = 120, where the end wall enters the 30 m range, and the
+// degradation is monotonic from there. The right wall degrades faster than
+// the left when the vehicle is offset toward the left, because the further
+// wall's returns are intercepted first.
+//
+// No filter is applied. Rejecting near-range returns would remove exactly
+// the points needed for obstacle response and for turning, so the failure
+// is documented and bounded rather than patched. Measurement runs should
+// terminate before the onset distance.
+
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
@@ -46,6 +69,7 @@ public:
     min_points_ = declare_parameter("min_points", 20);
     target_frame_ = declare_parameter("target_frame", std::string("base_link"));
     reject_dist_ = declare_parameter("reject_dist", 0.30);
+    max_residual_ = declare_parameter("max_residual", 0.05);
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -58,8 +82,10 @@ public:
       std::bind(&CorridorGeometryNode::on_cloud, this, std::placeholders::_1));
 
     RCLCPP_INFO(get_logger(),
-      "z band [%.2f, %.2f] m, min %ld points per side, target frame %s",
-      z_min_, z_max_, min_points_, target_frame_.c_str());
+      "z band [%.2f, %.2f] m, min %ld points per side, reject %.2f m, "
+      "max residual %.3f m, target frame %s",
+      z_min_, z_max_, min_points_, reject_dist_, max_residual_,
+      target_frame_.c_str());
   }
 
 private:
@@ -172,27 +198,23 @@ private:
     out.right_points = right.n;
     out.left_residual  = left.residual;
     out.right_residual = right.residual;
-    out.valid = left.ok && right.ok;
+        // Fit succeeded: the geometry is computable. Publish it regardless of
+    // quality, so a consumer that ignores the flag sees a real degraded
+    // number rather than a plausible zero.
+    const bool computable = left.ok && right.ok;
 
-    if (out.valid) {
-      // Centreline is the mean of the two wall lines.
+    // Trustworthy: the fit is also clean enough to rely on. Normal
+    // operation gives a residual around 0.013 m; an end wall inside the
+    // sensor's range drives it past 0.16 m.
+    out.valid = computable &&
+                left.residual  < max_residual_ &&
+                right.residual < max_residual_;
+
+    if (computable) {
       const double m = 0.5 * (left.slope + right.slope);
       const double c = 0.5 * (left.intercept + right.intercept);
-
-      // Offset: signed perpendicular distance from the origin to the
-      // centreline. Positive means the centreline lies to the left, so
-      // the vehicle is to the right of centre. Negate so that a positive
-      // offset means the vehicle itself is left of centre.
       out.lateral_offset = -c / std::sqrt(1.0 + m * m);
-
-      // Heading: the vehicle's x axis relative to the corridor axis.
-      // The centreline slope is the corridor direction in vehicle frame,
-      // so the vehicle points left of the corridor when the slope is
-      // negative.
       out.heading_error = -std::atan(m);
-
-      // Perpendicular separation of the two fitted lines, evaluated with
-      // the mean slope.
       out.corridor_width =
         std::abs(left.intercept - right.intercept) / std::sqrt(1.0 + m * m);
     }
@@ -205,7 +227,7 @@ private:
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  double z_min_, z_max_;
+  double z_min_, z_max_, max_residual_;
   double reject_dist_;
   int64_t min_points_;
   std::string target_frame_;
