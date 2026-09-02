@@ -23,6 +23,10 @@
   <xacro:property name="body_mass"  value="5000.0"/>
   <xacro:property name="wheel_mass" value="100.0"/>
 
+  <xacro:property name="lidar_x"     value="4.2"/>
+  <xacro:property name="lidar_z"     value="1.0"/>
+  <xacro:property name="lidar_pitch" value="0.20944"/>  <!-- 12 deg, nose down -->
+
   <material name="steel">  <color rgba="0.55 0.58 0.60 1"/></material>
   <material name="rubber"> <color rgba="0.15 0.15 0.15 1"/></material>
 
@@ -152,6 +156,22 @@
     <origin xyz="0 0 0.5" rpy="0 0 0"/>
   </joint>
 
+  <!-- LiDAR at the front bumper plus 0.2 m standoff, 1.0 m above the floor,
+       pitched 12 degrees nose down. The standoff prevents the outermost
+       beams of the 180 degree fan from grazing the vehicle's own bodywork. -->
+  <link name="lidar_link">
+    <inertial>
+      <mass value="1.0"/>
+      <inertia ixx="1e-3" iyy="1e-3" izz="1e-3" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="lidar_link"/>
+    <origin xyz="${lidar_x} 0 ${lidar_z}" rpy="0 ${lidar_pitch} 0"/>
+  </joint>
+
   <gazebo>
     <plugin filename="gz-sim-ackermann-steering-system"
             name="gz::sim::systems::AckermannSteering">
@@ -205,6 +225,39 @@
           </x>
         </linear_acceleration>
       </imu>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="lidar_link">
+    <sensor name="lidar" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>20</update_rate>
+      <topic>scan</topic>
+      <gz_frame_id>lidar_link</gz_frame_id>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>361</samples>
+            <resolution>1</resolution>
+            <min_angle>-1.5707963</min_angle>
+            <max_angle>1.5707963</max_angle>
+          </horizontal>
+          <vertical>
+            <samples>16</samples>
+            <resolution>1</resolution>
+            <min_angle>-0.1256637</min_angle>
+            <max_angle>0.5986480</max_angle>
+          </vertical>
+        </scan>
+        <range>
+          <min>0.5</min>
+          <max>30.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>none</type>
+        </noise>
+      </lidar>
     </sensor>
   </gazebo>
 
