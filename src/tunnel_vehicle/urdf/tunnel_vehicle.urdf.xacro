@@ -215,14 +215,35 @@
       <gz_frame_id>imu_link</gz_frame_id>
       <imu>
         <angular_velocity>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>1.45e-3</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.0</bias_stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>1.45e-3</stddev>
+              <bias_mean>0.0</bias_mean>
+              <bias_stddev>0.0</bias_stddev>
+            </noise>
+          </y>
           <z>
-            <noise type="none"/>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>1.45e-3</stddev>
+              <bias_mean>8.7266e-4</bias_mean>
+              <bias_stddev>0.0</bias_stddev>
+            </noise>
           </z>
         </angular_velocity>
         <linear_acceleration>
-          <x>
-            <noise type="none"/>
-          </x>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0</stddev></noise></z>
         </linear_acceleration>
       </imu>
     </sensor>
@@ -264,6 +285,9 @@
   <gazebo>
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher"/>
+<!-- 
+      <update_rate>100</update_rate>
+    </plugin> -->
   </gazebo>
 
 </robot>

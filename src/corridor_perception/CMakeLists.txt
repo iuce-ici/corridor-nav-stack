@@ -32,6 +32,13 @@ add_executable(corridor_geometry src/corridor_geometry_node.cpp)
 ament_target_dependencies(corridor_geometry
   rclcpp sensor_msgs geometry_msgs tf2_ros tf2_sensor_msgs corridor_msgs)
 
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+
+add_executable(dead_reckoning src/dead_reckoning_node.cpp)
+ament_target_dependencies(dead_reckoning rclcpp sensor_msgs nav_msgs)
+install(TARGETS dead_reckoning DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS corridor_geometry
   DESTINATION lib/${PROJECT_NAME})
 
