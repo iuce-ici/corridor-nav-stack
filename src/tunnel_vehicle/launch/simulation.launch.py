@@ -32,6 +32,11 @@ def generate_launch_description():
         'y', default_value='0.0',
         description='Lateral spawn offset from the corridor centreline, metres')
 
+    spawn_yaw = LaunchConfiguration('yaw')
+    declare_yaw = DeclareLaunchArgument(
+        'yaw', default_value='0.0',
+        description='Spawn yaw relative to the corridor axis, radians')
+
     target_x = LaunchConfiguration('target_x')
     declare_target_x = DeclareLaunchArgument(
         'target_x', default_value='110.0',
@@ -60,7 +65,7 @@ def generate_launch_description():
             '-world', 'corridor',
             '-topic', 'robot_description',
             '-name', 'vehicle',
-            '-x', '10.0', '-y', spawn_y, '-z', '0.05',
+            '-x', '10.0', '-y', spawn_y, '-z', '0.05', '-Y', spawn_yaw,
         ],
     )
 
@@ -121,6 +126,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_y,
+        declare_yaw,
         declare_target_x,
         declare_speed,
         gz_sim,
