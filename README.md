@@ -110,11 +110,19 @@ Measured at a 1.5 m lateral offset in an 8 m corridor. The run was deliberately
 continued past the clean region so the end wall degradation could be
 characterised.
 
-| Regime | `base_link` x | Offset error | Width error | Flag |
-|---|---|---|---|---|
-| End wall beyond sensor range | 0 to 115.8 | 0.44 mm | 0.47 mm | valid |
-| End wall entering the fits | 115.8 to 128 | 104 mm | 289 mm | invalid |
-| End wall dominating the fits | 128 to 141 | 751 mm | 2216 mm | invalid |
+| Analysis bucket, `base_link` x | Offset error | Width error | Flag |
+|---|---|---|---|
+| 10.0 to 114.8, end wall beyond sensor range | 0.44 mm | 0.47 mm | valid |
+| 114.8 to 127.9, end wall entering the fits from x = 115.8 | 104 mm | 289 mm | invalid from onset, a few scans just past 115.8 still valid |
+| 127.9 to 141.0, end wall dominating the fits | 751 mm | 2216 mm | invalid |
+
+Rows are equal width analysis buckets, x from 10 to 141 in ten steps, with the
+first eight identical and merged. The degradation onset is analytic at x = 115.8:
+end wall at 150 m, minus the LiDAR mount at 4.2 m, minus the 30 m maximum range.
+The last bucket excludes the scans at the final position, where the vehicle
+stood closest to the wall. Degraded values are signed means.
+**Corrected 20 September 2026:** the rows were previously labelled with the
+boundaries 115.8 and 128, which were not the boundaries of these numbers.
 
 Across the clean regime, 105 m of travel, the reported offset is constant to two
 decimals, with point counts and fit residuals identical bucket to bucket.
@@ -253,7 +261,8 @@ averaged into results. Read the termination line before analysing the bag.
 Gazebo is closed manually so a failed run can be inspected.
 
 **Measurement runs must terminate before x = 115.8**, the onset of end wall
-degradation. `target_x:=110.0` leaves 5.8 m of margin. Feeding the degraded
+degradation. `target_x:=110.0` stops commanding motion at x = 110.0; the vehicle coasts 
+about 1 m further while braking, which leaves about 4.8 m of margin. Feeding the degraded
 region into an estimator would make the resulting error a mixture of filter
 behaviour and known sensor degradation.
 
@@ -324,8 +333,6 @@ project comes from message header stamps.
   bounded rather than patched.
 - `JointStatePublisher` runs at the 1 ms physics rate, publishing joint state at
   roughly 980 Hz where 100 Hz would serve. Capping it is pending.
-- The drift analysis script is not yet in the repository, so the published drift
-  curve is not currently reproducible by a reader.
 - Drivetrain modelled kinematically rather than through `ros2_control`. Actuator
   lag is planned as a Phase 4 disturbance case.
 - Articulated double chassis vehicles are out of scope.
