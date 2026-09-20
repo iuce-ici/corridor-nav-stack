@@ -87,6 +87,71 @@ def sorted_rows(rows, label):
     return a
  
  
+def heading_excursions(geo, gt, t, eth, window):
+    """Is a heading excursion in the measurement or in the filter?
+ 
+    Compares the LiDAR's own heading error against ground truth with the
+    filter's, at the same moments. If the measurement carries the excursions,
+    the limit is the sensor's, not the estimator's."""
+    valid = geo[geo[:, 3] > 0.5]
+    t0, t1 = t[window][0], t[window][-1]
+    m = (valid[:, 0] >= t0) & (valid[:, 0] <= t1)
+    if m.sum() < 10:
+        print('\nHeading excursions: too few valid scans during motion')
+        return
+    ts = valid[m, 0]
+    meas_err = valid[m, 2] - np.interp(ts, gt[:, 0], np.unwrap(gt[:, 3]))
+    filt_err = np.interp(ts, t, eth)
+    c = float(np.corrcoef(meas_err, filt_err)[0, 1])
+    print('\nHeading excursions, during motion (no verdict)')
+    print(f'  measurement error  max |e| {np.max(np.abs(meas_err)) * 1e3:.4f} mrad   '
+          f'mean {np.mean(meas_err) * 1e3:+.4f}   std {np.std(meas_err) * 1e3:.4f}')
+    print(f'  filter error       max |e| {np.max(np.abs(filt_err)) * 1e3:.4f} mrad   '
+          f'mean {np.mean(filt_err) * 1e3:+.4f}   std {np.std(filt_err) * 1e3:.4f}')
+    print(f'  correlation between them {c:+.3f}   '
+          f'(near 1: the filter is following the measurement)')
+    k = int(np.argmax(np.abs(filt_err)))
+    print(f'  worst filter error at {ts[k] - t0:.2f} s into motion '
+          f'({100 * (ts[k] - t0) / (t1 - t0):.0f} percent through it): '
+          f'filter {filt_err[k] * 1e3:+.4f} mrad, measurement {meas_err[k] * 1e3:+.4f} mrad')
+    early = ts - t0 < 2.0
+    late = t1 - ts < 2.0
+    for name, sel in (('first 2 s of motion', early), ('last 2 s of motion', late),
+                      ('the rest', ~(early | late))):
+        if sel.sum():
+            print(f'  {name:<20} n {int(sel.sum()):5d}   filter max |e| '
+                  f'{np.max(np.abs(filt_err[sel])) * 1e3:.4f} mrad   measurement max |e| '
+                  f'{np.max(np.abs(meas_err[sel])) * 1e3:.4f} mrad')
+ 
+ 
+def error_table(b, gt, t, x, y, th, ey, eth, window, x0):
+    """The headline comparison: EKF against dead reckoning over the same run.
+ 
+    Dead reckoning starts at the spawn pose, so its frame matches ground truth
+    only when the vehicle spawns on the centreline at zero yaw. Checked here
+    rather than assumed."""
+    print('\nError over the motion window, EKF against dead reckoning')
+    gy0 = float(np.interp(t[window][0], gt[:, 0], gt[:, 2]))
+    gyaw0 = float(np.interp(t[window][0], gt[:, 0], np.unwrap(gt[:, 3])))
+    if abs(gy0) > 0.01 or abs(gyaw0) > 0.01:
+        print(f'  spawn was not on the centreline at zero yaw (y {gy0:.3f} m, yaw {gyaw0:.4f} rad):'
+              ' the dead reckoning rows would need its frame, skipped')
+        rows = [('EKF', ey[window], eth[window])]
+    else:
+        dr = sorted_rows([[stamp_s(m.header), m.pose.pose.position.y,
+                           yaw(m.pose.pose.orientation)] for m in b['/odom_dr']], '/odom_dr')
+        ts = t[window]
+        dr_y = np.interp(ts, dr[:, 0], dr[:, 1]) - np.interp(ts, gt[:, 0], gt[:, 2])
+        dr_th = np.interp(ts, dr[:, 0], np.unwrap(dr[:, 2])) - np.interp(ts, gt[:, 0], np.unwrap(gt[:, 3]))
+        rows = [('EKF', ey[window], eth[window]), ('dead reckoning', dr_y, dr_th)]
+    print(f"  {'':<16} {'lateral RMSE':>13} {'lateral max':>12} {'heading RMSE':>14}"
+          f" {'heading max':>12} {'lateral at end':>15}")
+    for name, e_y, e_th in rows:
+        print(f'  {name:<16} {np.sqrt(np.mean(e_y ** 2)) * 1e3:10.3f} mm '
+              f'{np.max(np.abs(e_y)) * 1e3:9.3f} mm {np.degrees(np.sqrt(np.mean(e_th ** 2))):11.4f} deg '
+              f'{np.degrees(np.max(np.abs(e_th))):9.4f} deg {e_y[-1] * 1e3:12.3f} mm')
+ 
+ 
 def verdict(ok):
     return 'PASS' if ok else 'FAIL'
  
@@ -190,11 +255,8 @@ def main():
     print(f'  stamp gap, filter time minus scan stamp: median {np.median(gap) * 1e3:.1f} ms, '
           f'max {np.max(gap) * 1e3:.1f} ms, min {np.min(gap) * 1e3:.1f} ms')
  
-    dr = b['/odom_dr']
-    if dr:
-        dr_s = sorted_rows([[stamp_s(m.header), m.pose.pose.position.y] for m in dr], '/odom_dr')
-        print(f'  for comparison, dead reckoning lateral position at end {dr_s[-1, 1]:+.3f} m '
-              f'(its own frame, starting at the spawn pose)')
+    heading_excursions(geo, gt, t, eth, window)
+    error_table(b, gt, t, x, y, th, ey, eth, window, x0)
  
     all_ok = ok1 and ok2 and ok3 and ok4 and ok5
     print(f'\nC1 to C5: {verdict(all_ok)}')
