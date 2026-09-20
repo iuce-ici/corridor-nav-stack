@@ -58,36 +58,47 @@ the direction wheel slip acts. A residual turn on gyro bias of 0.05 deg/s on the
 z axis, with white noise of 1.45e-3 rad/s per axis. Both live in the sensor
 definition or as a node parameter, not as noise injected by the node itself.
 
-Straight run, 100.176 m travelled at 2.0 m/s, ground truth lateral position
-constant at zero throughout, so all reported lateral error belongs to the
-estimator.
+Straight run at 2.0 m/s, ground truth lateral position constant at zero
+throughout, so all reported lateral error belongs to the estimator. Errors are
+measured from the first moving sample. The heading at 0 m is what accumulated
+while the vehicle stood still before motion.
 
-| Distance travelled | Total error | Longitudinal | Lateral |
-|---|---|---|---|
-| 10 m | 0.127 m | +0.114 m | +0.055 m |
-| 20 m | 0.261 m | +0.214 m | +0.150 m |
-| 30 m | 0.426 m | +0.313 m | +0.289 m |
-| 40 m | 0.626 m | +0.411 m | +0.471 m |
-| 50 m | 0.863 m | +0.509 m | +0.698 m |
-| 60 m | 1.137 m | +0.605 m | +0.962 m |
-| 70 m | 1.452 m | +0.700 m | +1.272 m |
-| 80 m | 1.808 m | +0.794 m | +1.624 m |
-| 90 m | 2.206 m | +0.887 m | +2.020 m |
-| 100 m | 2.644 m | +0.972 m | +2.459 m |
+| Distance travelled | Total error | Longitudinal | Lateral | Heading |
+|---|---|---|---|---|
+| 0 m | 0.000 m | +0.000 m | +0.000 m | +0.142 deg |
+| 10 m | 0.120 m | +0.109 m | +0.051 m | +0.409 deg |
+| 20 m | 0.252 m | +0.208 m | +0.143 m | +0.642 deg |
+| 30 m | 0.414 m | +0.307 m | +0.278 m | +0.881 deg |
+| 40 m | 0.611 m | +0.406 m | +0.457 m | +1.139 deg |
+| 50 m | 0.846 m | +0.503 m | +0.680 m | +1.385 deg |
+| 60 m | 1.116 m | +0.600 m | +0.941 m | +1.599 deg |
+| 70 m | 1.428 m | +0.695 m | +1.247 m | +1.863 deg |
+| 80 m | 1.780 m | +0.789 m | +1.595 m | +2.105 deg |
+| 90 m | 2.174 m | +0.882 m | +1.988 m | +2.350 deg |
+| 100 m | 2.611 m | +0.972 m | +2.423 m | +2.587 deg |
 
-Reported distance 101.176 m against a true 100.176 m, which is the one percent
-scale error propagating exactly as expected. Final integrated heading 3.298 deg
-against a true heading of zero.
+Reported distance 102.026 m against a true 101.024 m at the end of the run,
+which includes about 1 m of braking past the target: the one percent scale
+error propagating as expected. Heading is reported at distance, not at the end
+of the recording, because the bias keeps integrating while the vehicle stands
+still after the run.
 
-**Against closed form.** Longitudinal error was predicted at 1.00 m and measured
-at 0.970 m. Lateral error from a constant gyro bias should follow `b*d^2/(2v)`,
-predicting 2.18 m, and measured 2.467 m. The 13 percent excess has a named
-cause: the node integrates for three seconds before motion begins, and the run
-controller ramps to speed under a 2 m/s squared acceleration cap, so heading
-accumulates over a period in which less ground is covered than the constant
-speed formula assumes. The measured lateral to distance ratio falls short of a
-pure quadratic in the same direction, which is the signature of that cause
-rather than of noise.
+**Against closed form.** Longitudinal error was predicted at 1.00 m and
+measured at 0.972 m. Lateral error from a constant gyro bias should follow
+`b*d^2/(2v)`, predicting 2.18 m, and measured 2.423 m at 100 m. The excess has
+the shape of a heading offset present from the start, which adds a term linear
+in distance. A fit of lateral = a*d + c*d^2 matches every row to within
+2.2 mm. The quadratic coefficient is 2.133e-4 per metre against 2.182e-4
+predicted from the bias, 2 percent low, consistent with this run's gyro noise.
+The linear coefficient is 0.166 deg: the 0.142 deg of heading measured at the
+start of motion, plus 0.025 deg from the half second the acceleration ramp
+adds to the time taken to reach any distance.
+
+**Correction, 20 September 2026.** An earlier version of this table was
+computed from messages in the order the bag returned them, which is recorder
+receive order, not publish order. That moved the starting reference 0.85 m
+into the run and shifted every row; the 100 m lateral figure was published as
+2.459 m. The analysis now sorts by header stamp.
 
 ### Corridor geometry extraction
 
