@@ -39,6 +39,14 @@ add_executable(dead_reckoning src/dead_reckoning_node.cpp)
 ament_target_dependencies(dead_reckoning rclcpp sensor_msgs nav_msgs)
 install(TARGETS dead_reckoning DESTINATION lib/${PROJECT_NAME})
 
+find_package(std_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+add_executable(ekf src/ekf_node.cpp)
+ament_target_dependencies(ekf rclcpp sensor_msgs nav_msgs std_msgs)
+target_link_libraries(ekf Eigen3::Eigen)
+install(TARGETS ekf DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS corridor_geometry
   DESTINATION lib/${PROJECT_NAME})
 
