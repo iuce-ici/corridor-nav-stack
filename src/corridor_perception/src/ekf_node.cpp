@@ -123,8 +123,12 @@ private:
     // Rounding makes P drift very slightly asymmetric over thousands of steps.
     // Forcing symmetry keeps it a valid covariance and keeps the debug output,
     // which assumes symmetry, honest.
-    P_ = 0.5 * (P_ + P_.transpose());
- 
+        // Copy the transpose first. Writing P_ while reading P_.transpose() in the
+    // same expression is an Eigen aliasing error: later elements would read
+    // values that were already overwritten.
+    const Eigen::Matrix4d Pt = P_.transpose();
+    P_ = 0.5 * (P_ + Pt);
+    
     // Mean. Identical to dead_reckoning_node while b_ is 0.
     x_ += v_ * c * dt;
     y_ += v_ * s * dt;
