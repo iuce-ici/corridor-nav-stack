@@ -93,6 +93,13 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     )
 
+    corridor_geometry = Node(
+        package='corridor_perception',
+        executable='corridor_geometry',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
+    )
+
     run_controller = Node(
         package='corridor_experiments',
         executable='run_controller',
@@ -116,6 +123,7 @@ def generate_launch_description():
             on_exit=[
                 dead_reckoning,
                 ekf,
+                corridor_geometry,
                 # Motion begins after spawn settling has decayed. Driving through
                 # the settling transient would put a startup artefact in the first
                 # metre of every run.

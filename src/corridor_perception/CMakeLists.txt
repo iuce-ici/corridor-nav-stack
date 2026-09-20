@@ -43,7 +43,7 @@ find_package(std_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 add_executable(ekf src/ekf_node.cpp)
-ament_target_dependencies(ekf rclcpp sensor_msgs nav_msgs std_msgs)
+ament_target_dependencies(ekf rclcpp sensor_msgs nav_msgs std_msgs corridor_msgs)
 target_link_libraries(ekf Eigen3::Eigen)
 install(TARGETS ekf DESTINATION lib/${PROJECT_NAME})
 

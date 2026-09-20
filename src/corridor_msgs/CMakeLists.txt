@@ -12,6 +12,8 @@ find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CorridorGeometry.msg"
+  "msg/EkfState.msg"
+  "msg/EkfUpdate.msg"
   DEPENDENCIES std_msgs
 )
 
