@@ -10,6 +10,8 @@ Changes from the Part 5 version in scratch/, and only these:
      increasing. Every line the old version printed is otherwise computed the
      same way, so the two outputs can be compared line for line.
   2. Added output only:
+       the scan to scan spread of offset and heading error in the clean
+         regime, with lag one correlation: the measurement noise R needs;
        backward intervals found in the bag, per topic;
        how far each geometry message's ground truth x moves between the
          unsorted and the sorted interpolation, and how many messages change
@@ -148,6 +150,41 @@ def main(path):
             continue
         print(f"{names[r]:>24} {m.sum():6d} {np.mean(np.abs(off_err[m]))*1000:13.2f}"
               f" {np.mean(np.abs(width_err[m]))*1000:15.2f} {np.mean(geo[m, 8]):7.3f}")
+ 
+    r_estimate(geo, tx, off_err, head_err)
+ 
+ 
+def lag1(e):
+    """Correlation of each scan's error with the next one's. Near 0 means scan
+    to scan errors are independent, as the Kalman filter assumes. Near 1 means
+    the error is mostly a slowly varying or constant offset, which R cannot
+    describe and the filter will treat as truth."""
+    e = e - np.mean(e)
+    d = np.sum(e * e)
+    return float(np.sum(e[:-1] * e[1:]) / d) if d > 0 else float('nan')
+ 
+ 
+def r_estimate(geo, tx, off_err, head_err):
+    """Scan to scan spread of the measurement at a constant true lateral pose,
+    in the clean regime. This, not the per point fit residual, is what R needs.
+    Moving and stationary scans are reported separately: with range noise at
+    zero, a stationary scene renders identically every scan."""
+    t = geo[:, 0]
+    speed = np.gradient(tx, t)
+    clean = tx < ONSET_X
+    groups = (('moving, clean', clean & (speed > 0.1)),
+              ('stationary, clean', clean & (speed <= 0.1)))
+    print("\nMeasurement noise for R (clean regime, valid scans only)")
+    print(f"{'scans':>20} {'n':>6} {'offset mean mm':>15} {'offset std mm':>14}"
+          f" {'lag1':>6} {'heading mean mrad':>18} {'heading std mrad':>17} {'lag1':>6}")
+    for name, m in groups:
+        m = m & (geo[:, 8] > 0.5)
+        if m.sum() < 3:
+            print(f"{name:>20} {int(m.sum()):6d}")
+            continue
+        o, h = off_err[m], head_err[m]
+        print(f"{name:>20} {int(m.sum()):6d} {np.mean(o)*1e3:15.3f} {np.std(o)*1e3:14.4f}"
+              f" {lag1(o):6.2f} {np.mean(h)*1e3:18.4f} {np.std(h)*1e3:17.5f} {lag1(h):6.2f}")
  
  
 main(sys.argv[1])
