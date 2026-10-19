@@ -15,7 +15,7 @@ def generate_launch_description():
     pkg_vehicle = get_package_share_directory('tunnel_vehicle')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
-    world_path = os.path.join(pkg_corridor, 'worlds', 'corridor.sdf')
+    worlds_dir = os.path.join(pkg_corridor, 'worlds')
     xacro_path = os.path.join(pkg_vehicle, 'urdf', 'tunnel_vehicle.urdf.xacro')
 
     seed = LaunchConfiguration('seed')
@@ -23,12 +23,21 @@ def generate_launch_description():
         'seed', default_value='42',
         description='Gazebo random seed. Fixes the noise realisation for a run')
 
+    world = LaunchConfiguration('world')
+    declare_world = DeclareLaunchArgument(
+        'world', default_value='corridor',
+        description='World file stem in corridor_sim/worlds, without .sdf. '
+                    'Scenarios: corridor, corridor_single_left, '
+                    'corridor_single_right, corridor_slalom, corridor_narrow, '
+                    'corridor_late')
+
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
         ),
         launch_arguments={'gz_args': PythonExpression(
-            ["'-r --seed ' + '", seed, "' + ' -v 4 ", world_path, "'"])}.items(),   
+            ["'-r --seed ' + '", seed, "' + ' -v 4 ", worlds_dir,
+             "/' + '", world, "' + '.sdf'"])}.items(),
     )
 
     spawn_y = LaunchConfiguration('y')
@@ -143,6 +152,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_world,
         declare_y,
         declare_seed,
         declare_lidar_noise,

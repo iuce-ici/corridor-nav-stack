@@ -10,6 +10,43 @@ LENGTH = 150.0
 HEIGHT = 8.0
 WALL_THICKNESS = 0.2
 
+# Obstacles. Each is (x, y) of its centre; size and height are common.
+# Height 1.5 m against a LiDAR at z = 1.0, so only the upper layers see it and
+# a far obstacle is a handful of returns: that is the realistic case.
+# Every obstacle stays at least 1 m clear of both walls, so its points fall
+# outside the 0.30 m outlier band of the wall fit and cannot corrupt it.
+OBSTACLE_SIZE = (1.2, 1.2, 1.5)
+
+SCENARIOS = {
+    "clear":        [],
+    "single_left":  [(50.0,  0.6)],
+    "single_right": [(50.0, -0.6)],
+    "slalom":       [(40.0,  0.8), (70.0, -0.8)],
+    "narrow":       [(50.0,  1.0)],
+    "late":         [(18.0,  0.0)],
+}
+
+
+def obstacle_model(index, x, y):
+    sx, sy, sz = OBSTACLE_SIZE
+    return f"""    <model name="obstacle_{index}">
+      <static>true</static>
+      <link name="body">
+        <pose>{x} {y} {sz / 2.0} 0 0 0</pose>
+        <collision name="body_collision">
+          <geometry><box><size>{sx} {sy} {sz}</size></box></geometry>
+        </collision>
+        <visual name="body_visual">
+          <geometry><box><size>{sx} {sy} {sz}</size></box></geometry>
+          <material>
+            <ambient>0.8 0.35 0.1 1</ambient>
+            <diffuse>0.8 0.35 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+"""
+
 OUTPUT = "corridor.sdf"
 
 
@@ -36,7 +73,7 @@ def box_link(name, size, pose, colour):
 """
 
 
-def build():
+def build(obstacles=()):
     half_w = WIDTH / 2.0
     half_t = WALL_THICKNESS / 2.0
     mid_x = LENGTH / 2.0
@@ -85,6 +122,9 @@ def build():
 
     body = "".join(links)
 
+    obstacle_xml = "".join(
+        obstacle_model(i, x, y) for i, (x, y) in enumerate(obstacles))
+
     return f"""<?xml version="1.0" ?>
 <sdf version="1.8">
   <world name="corridor">
@@ -118,13 +158,32 @@ def build():
     <model name="corridor_structure">
       <static>true</static>
 {body}    </model>
-
+{obstacle_xml}
   </world>
 </sdf>
 """
 
 
 if __name__ == "__main__":
-    with open(OUTPUT, "w") as f:
-        f.write(build())
-    print(f"Wrote {OUTPUT}: {LENGTH} m long, {WIDTH} m wide, {HEIGHT} m high")
+    import json
+    import sys
+
+    name = sys.argv[1] if len(sys.argv) > 1 else None
+    if name is not None and name not in SCENARIOS:
+        sys.exit(f"unknown scenario {name}. Known: {', '.join(SCENARIOS)}")
+
+    obstacles = SCENARIOS[name] if name else []
+    out = OUTPUT if name is None else f"corridor_{name}.sdf"
+    with open(out, "w") as f:
+        f.write(build(obstacles))
+
+    if name is not None:
+        # Sidecar so the analysis reads obstacle truth from one place rather
+        # than duplicating these constants.
+        with open(f"corridor_{name}.obstacles.json", "w") as f:
+            json.dump({"size": OBSTACLE_SIZE,
+                       "obstacles": [{"x": x, "y": y} for x, y in obstacles]},
+                      f, indent=2)
+
+    print(f"Wrote {out}: {LENGTH} m long, {WIDTH} m wide, {HEIGHT} m high, "
+          f"{len(obstacles)} obstacles")
