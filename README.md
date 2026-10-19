@@ -36,7 +36,7 @@ hardware result.
 |---|---|---|---|
 | 0 | Tooling floor, off the shelf robot | C++ node written by hand, rosbag recorded and replayed, repository exists | complete |
 | 1 | Vehicle and corridor build, corridor geometry extraction, dead reckoned odometry | Offset and heading against Gazebo ground truth with error statistics and timing, documented odometry drift curve | **complete** |
-| 2 | EKF localisation | Pose RMSE against ground truth, with and without the LiDAR update, written account of Q and R selection and of behaviour under mistuning | next |
+| 2 | EKF localisation | Pose RMSE against ground truth, with and without the LiDAR update, written account of Q and R selection and of behaviour under mistuning | **complete** |
 | 3 | Pure pursuit and Stanley, metric harness | Both closed loop on the EKF estimate, full metric table, lookahead swept | not started |
 | 4 | LQR on own bicycle model state space | Three way comparison table including noise and disturbance cases, written verdict | not started |
 | 5 | Ship | README with all numbers, architecture diagram, Docker, CI, demo video, one command clone and run | not started |
@@ -162,6 +162,152 @@ trustworthy are two different conditions and the code distinguishes them.
 | Fit residual, normal operation | 0.013 m |
 | Gyro bias, measured over 5865 samples | 0.05084 deg/s against 0.05000 configured |
 
+## Phase 2 results
+
+Dead reckoning drifts because nothing corrects it. The corridor walls are a
+measurement that is always available in a tunnel, and they observe exactly the
+two quantities that matter for staying in the bore: how far the vehicle is from
+the centreline, and which way it points relative to the corridor axis. Phase 2
+builds an extended Kalman filter around that measurement and quantifies what it
+is worth.
+
+### The filter
+
+State `[x, y, theta, b]`: position along the corridor, lateral offset from the
+centreline, heading relative to the corridor axis, and the gyro bias in rad/s.
+
+The bias is a state because the Phase 1 drift curve is dominated by it. Gyro
+white noise at the configured density accounts for about 6 cm of lateral
+standard deviation over 100 m; the measured drift was 2.4 m, roughly forty
+times more. A three state filter would claim 6 cm while being metres wrong, and
+would therefore under weight every LiDAR correction. With the bias in the
+state, the filter's own covariance grows the way the real error grows, and the
+heading residuals let it work the bias out.
+
+**Predict**, at 100 Hz from the wheels and the gyro: the same midpoint heading
+integration as the dead reckoning node, with the bias estimate subtracted.
+
+**Update**, at 20 Hz from each valid corridor geometry scan. The frame is fixed
+by the first valid scan, so `h(state) = [y, theta]` and `H` is constant. The
+covariance update is in Joseph form, which keeps `P` symmetric and positive
+definite under rounding in a matrix whose entries span many orders of
+magnitude.
+
+The gyro bias estimate starts at zero. Its magnitude and its sign are both
+learned from the LiDAR, never configured.
+
+### Measurement noise, measured rather than chosen
+
+`R` is the scan to scan spread of the extracted offset and heading at a
+constant true pose, measured on a dedicated run:
+
+| With 3 cm LiDAR range noise | Value |
+|---|---|
+| Per point range noise | 30 mm |
+| Spread of the fitted lateral offset | 0.73 mm |
+| Spread of the fitted heading | 0.0546 mrad |
+| Lag one correlation of the offset error | -0.04 |
+| Fit residual | 0.0253 m, against a 0.05 m validity threshold |
+| Valid fraction in the clean regime | 1.000 |
+
+Each wall fit uses about 2070 points, so the line fit averages the per point
+noise down by roughly the square root of that, a factor of 45. The measured
+reduction is 41. The near zero lag one correlation means the scan to scan
+errors are independent, which is what the filter assumes.
+
+The fit residual is the scatter of individual returns about the fitted line. It
+is not the noise on the fitted offset and it is not `R`.
+
+### Results, ten seeds
+
+Ten runs of 101 m at 2 m/s, each a different Gazebo seed and so a different
+noise realisation. Errors are against ground truth over the motion window.
+
+| | Mean | Standard deviation | Worst run |
+|---|---|---|---|
+| EKF lateral RMSE | 0.033 mm | 0.012 mm | 0.061 mm |
+| EKF lateral max | 0.115 mm | 0.057 mm | 0.243 mm |
+| EKF heading RMSE | 0.0447 mrad | 0.0014 mrad | 0.0466 mrad |
+| EKF heading max | 0.189 mrad | 0.034 mrad | 0.277 mrad |
+| Dead reckoning lateral max | 2556 mm | 126 mm | 2704 mm |
+| Gyro bias error | +0.27 percent | 1.78 percent | 3.45 percent (1.86 sigma) |
+| Longitudinal error at 101 m | 1.010 m | 0.000 m | 1.011 m |
+
+Two comparisons, because only the pair of them is honest. Against dead
+reckoning, the lateral error falls from 2.56 m to about a tenth of a
+millimetre: that is what having the walls is worth. Against a single scan,
+0.73 mm to 0.033 mm, a factor of 22: that is what the filter itself is worth
+over simply trusting each scan, and it comes from combining many scans through
+a motion model. Heading improves by only a factor of 1.2, because between
+updates it rides on the gyro.
+
+The simulator sets the gyro bias sign from the seed. Five runs came out
+positive and five negative, and every one was estimated within 3.45 percent and
+1.86 sigma of its own sign.
+
+The worst run is seed 404: heading max 0.277 mrad against a 0.28 mrad limit,
+mean NIS 2.165, bias error 2.96 percent. One run in ten brushing a six sigma
+bound is about what correct Gaussian behaviour produces over this many samples.
+
+### Consistency
+
+Mean normalised innovation squared is 2.053 across the ten seeds, standard
+deviation 0.055, range 1.976 to 2.165. A consistent filter gives the
+measurement dimension, here 2. The filter's claimed uncertainty therefore
+matches its actual error, which is what makes that claimed uncertainty usable
+by anything downstream.
+
+### Behaviour under mistuning
+
+The same stack was run with LiDAR range noise switched off, where the
+extraction is accurate to about 2 microradians in heading but `R` was still set
+to 0.1 mrad, overstating the measurement noise by roughly fifty times. The
+filter then under weights every scan, and the heading estimate wanders on the
+gyro between updates: standard deviation 0.042 mrad with peaks near 0.16 mrad,
+against a measurement whose own error never exceeded 0.0022 mrad. The
+correlation between the measurement error and the filter error was 0.02, which
+is how the wander was attributed to the filter rather than to the sensor. Mean
+NIS in that configuration is 0.16 rather than 2, which is the signature of an
+`R` that is too large.
+
+That configuration is kept for isolating problems, since a noiseless sensor
+removes one variable, and is not used for reporting results.
+
+### What the filter cannot do
+
+Longitudinal position is unobservable in a straight corridor. The walls look
+the same at 30 m as at 80 m, so nothing measures distance along the bore. The
+error stays at 1.010 m over 101 m with zero spread across all ten seeds, which
+is exactly the one percent wheel radius error propagating, and the filter's
+covariance for `x` keeps growing. That is correct behaviour rather than a
+defect, and it is why the covariance on `x` must not be read as a position
+accuracy. Closing it needs a longitudinal feature: a cross passage, a known
+marker, or wheel odometry calibrated against one.
+
+The claimed lateral uncertainty also excludes the extraction's own systematic
+error, which is under 0.5 mm and depends on pose. No sensor on this vehicle can
+separate a small constant offset in the measurement from the vehicle genuinely
+sitting that far off the centreline.
+
+### How it was verified
+
+Each step had its exit criteria written before the run that tested it.
+
+| Step | Check | Result |
+|---|---|---|
+| Predict, in Python | `P` against 5000 Monte Carlo runs, three cases | Every standard deviation within 5 percent, every correlation within 0.05 |
+| Predict, in C++ | Mean against the dead reckoning node | Heading bit identical over 6000 steps, position within 0.020 mm |
+| Predict, in C++ | `P` against a Python replay of the node's own inputs | Agreement to 3.4e-14 |
+| Measurement signs | Stationary spawns at +3 and -3 degrees | Published heading matched true yaw within 0.02 mrad, same sign |
+| Update | Five criteria on one run, then six across ten seeds | All pass; see the tables above |
+
+The Monte Carlo check was itself checked against three deliberately broken
+versions of the filter, each caught only by the case built to see it. A sign
+error in the bias column changes no variance at all and shows up only in the
+correlations. A sign error on `x` is invisible at zero heading and needs the 60
+degree case. A four times too large `Q` is hidden by the bias in both of those
+and needs the case with no bias at all.
+
 ## Configuration
 
 Every number below is fixed and any change to one invalidates results measured
@@ -192,7 +338,11 @@ uniform spacing, sensor frame -7.2 to +34.3 degrees. 180 degrees horizontal, 361
 samples at 0.5 degrees, the front mount being occluded to the rear by its own
 vehicle. 20 Hz, giving the 50 ms frame period used in service. Maximum range
 30.0 m, capped well below corridor length so the extraction sees the same class
-of scene throughout. Range noise zero for the current baseline.
+of scene throughout. Range noise is a launch argument, `lidar_noise`, standard deviation in metres,
+default 0.03. That is the figure for a sixteen layer sensor of this class.
+Zero is available for isolating problems: it makes the extraction nearly exact,
+which removes one variable when something else is being diagnosed, but it is
+not used for reporting results.
 
 Uniform layer spacing is a stated modelling simplification. Real spacing is non
 uniform and cannot be expressed in a single Gazebo sensor.
@@ -208,16 +358,18 @@ acceleration.
 
 ### Simulator seed
 
-Fixed at 42 through `--seed 42` in `gz_args`. This is part of the configuration,
-not an implementation detail. Without it, Gazebo draws the sign of the gyro bias
-independently on each run even when `bias_stddev` is zero, so two otherwise
-identical runs drift in opposite directions. With the seed fixed, the noise
+A launch argument, `seed`, default 42, passed to Gazebo. This is part of the
+configuration, not an implementation detail: the seed sets the sign of the gyro
+bias as well as the noise sequence, even when `bias_stddev` is zero, so two runs
+on different seeds can drift in opposite directions. Across the Phase 2 sweep of
+ten seeds the sign came out positive five times and negative five times. With the seed fixed, the noise
 sequence is reproducible to 3.4e-12 rad/s across runs; the residual is physics
 solver thread ordering, not the random source.
 
 A fixed seed means every run shares one noise realisation, so a single result is
 one draw rather than a statistic. Development and comparison run on seed 42.
-Headline figures from Phase 2 onward will be taken over a sweep of seeds.
+Headline figures from Phase 2 onward are taken over a sweep of ten seeds, run by
+`sweep_seeds.sh` and summarised by `aggregate_sweep.py`.
 
 ### Extraction parameters
 
@@ -243,15 +395,32 @@ Gazebo takes to load.
 ```
 # terminal 1: start recording before the launch so nothing is missed
 cd bags
-ros2 bag record -o NAME /odom_dr /model/vehicle/pose /clock
+ros2 bag record -o NAME /ekf/state /ekf/update /corridor_geometry \
+  /odom_ekf /odom_dr /imu /model/vehicle/pose /clock
 
 # terminal 2: one command runs everything
-ros2 launch tunnel_vehicle simulation.launch.py y:=0.0 target_x:=110.0 speed:=2.0
+ros2 launch tunnel_vehicle simulation.launch.py \
+  y:=0.0 target_x:=110.0 speed:=2.0 lidar_noise:=0.03 seed:=42
 ```
 
-Arguments: `y` sets the lateral spawn offset, `target_x` the absolute x at which
-the run terminates, `speed` the commanded forward speed. The vehicle spawns at
-x = 10, so `target_x:=110.0` gives 100 m of travel.
+Arguments: `y` sets the lateral spawn offset, `yaw` the spawn heading in radians,
+`target_x` the absolute x at which the run terminates, `speed` the commanded
+forward speed, `lidar_noise` the LiDAR range noise standard deviation in metres,
+and `seed` the Gazebo random seed. The vehicle spawns at x = 10, so
+`target_x:=110.0` gives 100 m of travel.
+
+The seed sweep that produces the Phase 2 headline figures runs ten seeds one at a
+time, recording one bag each:
+
+```
+./src/corridor_experiments/scripts/sweep_seeds.sh
+python3 src/corridor_experiments/scripts/aggregate_sweep.py bags/ekf_sweep_s*
+```
+
+Nothing else may be running while it does: a node left over from an earlier
+launch publishes on the same topics, and the bag then holds two nodes' messages
+interleaved. `ros2 node list` must be empty before a run. The sweep clears stale
+processes itself and the aggregator refuses a bag with duplicate timestamps.
 
 The run controller terminates on one of three conditions and reports which:
 target x reached, simulation time limit exceeded, or lateral bound exceeded. The
@@ -261,7 +430,7 @@ averaged into results. Read the termination line before analysing the bag.
 Gazebo is closed manually so a failed run can be inspected.
 
 **Measurement runs must terminate before x = 115.8**, the onset of end wall
-degradation. `target_x:=110.0` stops commanding motion at x = 110.0; the vehicle coasts 
+degradation. `target_x:=110.0` stops commanding motion at x = 110.0; the vehicle coasts
 about 1 m further while braking, which leaves about 4.8 m of margin. Feeding the degraded
 region into an estimator would make the resulting error a mixture of filter
 behaviour and known sensor degradation.
@@ -278,9 +447,17 @@ src/
   corridor_msgs/        custom interfaces
   corridor_perception/  system under test
     src/corridor_geometry_node.cpp
-    src/dead_reckoning_node.cpp
+        src/dead_reckoning_node.cpp
+    src/ekf_node.cpp
   corridor_experiments/ test apparatus
-    src/run_controller.cpp
+        src/run_controller.cpp
+    scripts/ekf_predict_consistency.py   predict step against Monte Carlo
+    scripts/analyse_drift.py             Phase 1 drift curve
+    scripts/analyse_run.py               corridor geometry against truth
+    scripts/analyse_ekf_predict.py       EKF predict only checks
+    scripts/analyse_ekf_update.py        EKF criteria for one run
+    scripts/sweep_seeds.sh               ten seed sweep
+    scripts/aggregate_sweep.py           sweep summary
 ```
 
 The separation is deliberate. `corridor_experiments` is test apparatus and is
@@ -336,3 +513,11 @@ project comes from message header stamps.
 - Drivetrain modelled kinematically rather than through `ros2_control`. Actuator
   lag is planned as a Phase 4 disturbance case.
 - Articulated double chassis vehicles are out of scope.
+- Longitudinal position is unobservable in a straight corridor and drifts with
+  the wheel scale error, 1.010 m over 101 m. The filter's covariance on `x`
+  grows accordingly and is not a position accuracy.
+- The claimed lateral uncertainty excludes the extraction's own systematic
+  error, which is under 0.5 mm and varies with pose. No sensor here can
+  separate it from a genuine offset.
+- Every number is measured in simulation. Simulation exercises the algorithms;
+  it does not validate them against hardware.
