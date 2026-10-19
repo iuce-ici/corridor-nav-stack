@@ -47,6 +47,11 @@ ament_target_dependencies(ekf rclcpp sensor_msgs nav_msgs std_msgs corridor_msgs
 target_link_libraries(ekf Eigen3::Eigen)
 install(TARGETS ekf DESTINATION lib/${PROJECT_NAME})
 
+add_executable(obstacle_extraction src/obstacle_extraction_node.cpp)
+ament_target_dependencies(obstacle_extraction
+  rclcpp sensor_msgs geometry_msgs tf2_ros tf2_sensor_msgs corridor_msgs)
+install(TARGETS obstacle_extraction DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS corridor_geometry
   DESTINATION lib/${PROJECT_NAME})
 
