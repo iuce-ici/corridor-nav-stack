@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, TimerAction, DeclareLaunchArgument, RegisterEventHandler
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration, Command
+from launch.substitutions import LaunchConfiguration, Command, PythonExpression
 from launch.event_handlers import OnProcessExit
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -18,11 +18,17 @@ def generate_launch_description():
     world_path = os.path.join(pkg_corridor, 'worlds', 'corridor.sdf')
     xacro_path = os.path.join(pkg_vehicle, 'urdf', 'tunnel_vehicle.urdf.xacro')
 
+    seed = LaunchConfiguration('seed')
+    declare_seed = DeclareLaunchArgument(
+        'seed', default_value='42',
+        description='Gazebo random seed. Fixes the noise realisation for a run')
+
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
         ),
-        launch_arguments={'gz_args': f'-r --seed 42 -v 4 {world_path}'}.items(),
+        launch_arguments={'gz_args': PythonExpression(
+            ["'-r --seed ' + '", seed, "' + ' -v 4 ", world_path, "'"])}.items(),   
     )
 
     spawn_y = LaunchConfiguration('y')
@@ -138,6 +144,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_y,
+        declare_seed,
         declare_lidar_noise,
         declare_yaw,
         declare_target_x,
