@@ -65,6 +65,32 @@ def generate_launch_description():
         'lidar_noise', default_value='0.03',
         description='LiDAR range noise standard deviation, metres. 0.0 for none')
 
+    # Detection dropout test hook. All off at these defaults, so a run that
+    # passes none of them is the detector as verified. drop_prob above zero
+    # starts an outage with that probability per scan, lasting a uniformly
+    # drawn drop_min_run to drop_max_run scans, from a seeded generator so the
+    # pattern is random but reproducible. Record the seed with the bag.
+    drop_prob = LaunchConfiguration('drop_prob')
+    declare_drop_prob = DeclareLaunchArgument(
+        'drop_prob', default_value='0.0',
+        description='Probability per scan of starting a detection outage. '
+                    '0.0 disables the hook')
+
+    drop_min_run = LaunchConfiguration('drop_min_run')
+    declare_drop_min_run = DeclareLaunchArgument(
+        'drop_min_run', default_value='4',
+        description='Shortest forced outage, in scans')
+
+    drop_max_run = LaunchConfiguration('drop_max_run')
+    declare_drop_max_run = DeclareLaunchArgument(
+        'drop_max_run', default_value='20',
+        description='Longest forced outage, in scans')
+
+    drop_seed = LaunchConfiguration('drop_seed')
+    declare_drop_seed = DeclareLaunchArgument(
+        'drop_seed', default_value='42',
+        description='Seed for the outage pattern. Vary across runs')
+
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -123,6 +149,22 @@ def generate_launch_description():
         package='corridor_perception',
         executable='obstacle_extraction',
         output='screen',
+        parameters=[{
+            'use_sim_time': True,
+            # Launch arguments arrive as strings, and the node declared these
+            # as double and integer, so each needs its type stated or the node
+            # rejects the parameter at startup.
+            'drop_prob': ParameterValue(drop_prob, value_type=float),
+            'drop_min_run': ParameterValue(drop_min_run, value_type=int),
+            'drop_max_run': ParameterValue(drop_max_run, value_type=int),
+            'drop_seed': ParameterValue(drop_seed, value_type=int),
+        }],
+    )
+
+    obstacle_tracking = Node(
+        package='corridor_perception',
+        executable='obstacle_tracking',
+        output='screen',
         parameters=[{'use_sim_time': True}],
     )
 
@@ -151,6 +193,7 @@ def generate_launch_description():
                 ekf,
                 corridor_geometry,
                 obstacle_extraction,
+                obstacle_tracking,
                 # Motion begins after spawn settling has decayed. Driving through
                 # the settling transient would put a startup artefact in the first
                 # metre of every run.
@@ -167,6 +210,10 @@ def generate_launch_description():
         declare_yaw,
         declare_target_x,
         declare_speed,
+        declare_drop_prob,
+        declare_drop_min_run,
+        declare_drop_max_run,
+        declare_drop_seed,
         gz_sim,
         robot_state_publisher,
         bridge,

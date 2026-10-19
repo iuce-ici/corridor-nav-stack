@@ -52,6 +52,10 @@ ament_target_dependencies(obstacle_extraction
   rclcpp sensor_msgs geometry_msgs tf2_ros tf2_sensor_msgs corridor_msgs)
 install(TARGETS obstacle_extraction DESTINATION lib/${PROJECT_NAME})
 
+add_executable(obstacle_tracking src/obstacle_tracking_node.cpp)
+ament_target_dependencies(obstacle_tracking rclcpp nav_msgs corridor_msgs)
+install(TARGETS obstacle_tracking DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS corridor_geometry
   DESTINATION lib/${PROJECT_NAME})
 

@@ -16,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/EkfUpdate.msg"
   "msg/Obstacle.msg"
   "msg/ObstacleArray.msg"
+  "msg/ObstacleTrackArray.msg"
+  "msg/ObstacleTrack.msg"
   DEPENDENCIES std_msgs
 )
 
