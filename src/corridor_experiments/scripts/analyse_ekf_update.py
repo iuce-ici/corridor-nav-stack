@@ -15,11 +15,22 @@ compared as distance from the pose at initialisation.
 Exit criteria, fixed before the first run:
   C1 mechanics   updates applied / valid scans after initialisation >= 0.99
   C2 bias        |b_hat - 8.7266e-4| <= 3 sigma_b at the end, sigma_b from P
-  C3 lateral     |y_hat - y_true| <= 1.0 mm throughout the motion
-  C4 heading     |theta_hat - yaw_true| <= 0.2 mrad throughout the motion
+  C3 lateral     RMSE and max error against ground truth, during motion
+  C4 heading     RMSE and max error against ground truth, during motion
   C5 x           x error at the end within 5 cm of 1 percent of the distance
                  travelled: x is unobservable, so it must drift exactly like
                  dead reckoning's scale error
+  C6 consistency mean NIS between 1.0 and 3.0 (2 if the filter is consistent)
+ 
+C3, C4 and C6 are meaningful only when R is measured rather than chosen. With
+range noise off, R was set to cover a systematic error, so the filter was
+deliberately under confident and NIS was about 0.16. The limits below are the
+noise on ones, derived from P propagated with the measured R before the run:
+claimed sigma_y 0.064 mm and sigma_theta 0.0466 mrad in steady state, so RMSE
+is allowed 1.5 sigma and the maximum 6 sigma. Six, not four: with about a
+thousand independent samples in a run, the largest excursion of a correctly
+behaving Gaussian is expected near 4 sigma, so a 4 sigma limit would fail about
+half the time with nothing wrong.
  
 Diagnostics, no verdict, with the expectation stated in advance:
   claimed against actual error at the end. Expected: lateral about nine times
@@ -44,10 +55,13 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
  
 B_TRUE = 8.7266e-4        # rad/s, configured gyro bias
-LAT_TOL = 1.0e-3          # m, C3
-HEAD_TOL = 0.2e-3         # rad, C4
+LAT_RMSE_TOL = 0.10e-3    # m, C3, 1.5 times the predicted claimed sigma
+LAT_MAX_TOL = 0.38e-3     # m, C3, 6 sigma
+HEAD_RMSE_TOL = 0.07e-3   # rad, C4, 1.5 sigma
+HEAD_MAX_TOL = 0.28e-3    # rad, C4, 6 sigma
 X_TOL = 0.05              # m, C5
 MECH_MIN = 0.99           # C1
+NIS_LO, NIS_HI = 1.0, 3.0  # C6
 V_MOVING = 0.1            # m/s, ground truth speed that counts as moving
  
 WANTED = ['/ekf/state', '/ekf/update', '/corridor_geometry', '/odom_dr',
@@ -222,13 +236,16 @@ def main():
     # C3, C4 lateral and heading against truth, during motion
     ey = y - gy
     eth = th - gyaw
-    ok3 = np.max(np.abs(ey[window])) <= LAT_TOL
-    ok4 = np.max(np.abs(eth[window])) <= HEAD_TOL
-    print(f'C3 lateral     max |error| {np.max(np.abs(ey[window])) * 1e3:.3f} mm, '
-          f'mean {np.mean(ey[window]) * 1e3:+.3f} mm   (<= {LAT_TOL * 1e3:.1f} mm)   {verdict(ok3)}')
-    print(f'C4 heading     max |error| {np.max(np.abs(eth[window])) * 1e3:.4f} mrad, '
-          f'mean {np.mean(eth[window]) * 1e3:+.4f} mrad   (<= {HEAD_TOL * 1e3:.1f} mrad)   '
-          f'{verdict(ok4)}')
+    ry, rm = np.sqrt(np.mean(ey[window] ** 2)), np.max(np.abs(ey[window]))
+    ty, tm = np.sqrt(np.mean(eth[window] ** 2)), np.max(np.abs(eth[window]))
+    ok3 = ry <= LAT_RMSE_TOL and rm <= LAT_MAX_TOL
+    ok4 = ty <= HEAD_RMSE_TOL and tm <= HEAD_MAX_TOL
+    print(f'C3 lateral     RMSE {ry * 1e3:.4f} mm (<= {LAT_RMSE_TOL * 1e3:.2f}), '
+          f'max {rm * 1e3:.4f} mm (<= {LAT_MAX_TOL * 1e3:.2f}), '
+          f'mean {np.mean(ey[window]) * 1e3:+.4f} mm   {verdict(ok3)}')
+    print(f'C4 heading     RMSE {ty * 1e3:.5f} mrad (<= {HEAD_RMSE_TOL * 1e3:.3f}), '
+          f'max {tm * 1e3:.5f} mrad (<= {HEAD_MAX_TOL * 1e3:.3f}), '
+          f'mean {np.mean(eth[window]) * 1e3:+.5f} mrad   {verdict(ok4)}')
  
     # C5 longitudinal: unobservable, so it must drift like dead reckoning
     d_true = gx[-1] - x0
@@ -237,6 +254,22 @@ def main():
     print(f'C5 x           x error at end {ex:+.3f} m over {d_true:.2f} m, '
           f'expected {0.01 * d_true:+.3f} m from the radius error   (within {X_TOL:.2f} m)   '
           f'{verdict(ok5)}')
+ 
+    # C6 consistency. NIS is the innovation weighted by its own covariance:
+    # a consistent filter gives the measurement dimension, here 2.
+    innov = up[:, 1:3]
+    S = up[:, 3:7].reshape(-1, 2, 2)
+    nis = np.array([v @ np.linalg.solve(Sk, v) for v, Sk in zip(innov, S)])
+    nis_mean = float(np.mean(nis))
+    ok6 = NIS_LO <= nis_mean <= NIS_HI
+    print(f'C6 consistency mean NIS {nis_mean:.4f} over {len(nis)} updates '
+          f'(in [{NIS_LO}, {NIS_HI}], 2 if consistent)   {verdict(ok6)}')
+    if nis_mean < NIS_LO:
+        print('               below the band: R is larger than the real measurement noise, '
+              'so the filter under weights every scan')
+    elif nis_mean > NIS_HI:
+        print('               above the band: R is smaller than the real measurement noise, '
+              'or the model is missing something the measurement sees')
  
     # Diagnostics
     print('\nDiagnostics (no verdict)')
@@ -247,10 +280,7 @@ def main():
         r = abs(err) / s if s > 0 else float('inf')
         print(f'  {name:<8} actual {err * scale:+10.4f} {unit}   claimed sigma {s * scale:10.4f} {unit}'
               f'   actual / claimed {r:8.2f}')
-    innov = up[:, 1:3]
-    S = up[:, 3:7].reshape(-1, 2, 2)
-    nis = np.array([v @ np.linalg.solve(Sk, v) for v, Sk in zip(innov, S)])
-    print(f'  NIS mean {np.mean(nis):.4f} (2 if consistent; expected well below)')
+    print(f'  NIS mean {nis_mean:.4f}, see C6')
     gap = up[:, 11]
     print(f'  stamp gap, filter time minus scan stamp: median {np.median(gap) * 1e3:.1f} ms, '
           f'max {np.max(gap) * 1e3:.1f} ms, min {np.min(gap) * 1e3:.1f} ms')
@@ -258,11 +288,10 @@ def main():
     heading_excursions(geo, gt, t, eth, window)
     error_table(b, gt, t, x, y, th, ey, eth, window, x0)
  
-    all_ok = ok1 and ok2 and ok3 and ok4 and ok5
-    print(f'\nC1 to C5: {verdict(all_ok)}')
+    all_ok = ok1 and ok2 and ok3 and ok4 and ok5 and ok6
+    print(f'\nC1 to C6: {verdict(all_ok)}')
     return 0 if all_ok else 1
  
  
 if __name__ == '__main__':
     sys.exit(main())
- 

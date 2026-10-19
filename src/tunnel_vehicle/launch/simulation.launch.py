@@ -4,9 +4,9 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, TimerAction, DeclareLaunchArgument, RegisterEventHandler
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-import xacro
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, Command
 from launch.event_handlers import OnProcessExit
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 
@@ -17,8 +17,6 @@ def generate_launch_description():
 
     world_path = os.path.join(pkg_corridor, 'worlds', 'corridor.sdf')
     xacro_path = os.path.join(pkg_vehicle, 'urdf', 'tunnel_vehicle.urdf.xacro')
-
-    robot_description = xacro.process_file(xacro_path).toxml()
 
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -47,13 +45,19 @@ def generate_launch_description():
         'speed', default_value='2.0',
         description='Commanded forward speed, m/s')
 
+    lidar_noise = LaunchConfiguration('lidar_noise')
+    declare_lidar_noise = DeclareLaunchArgument(
+        'lidar_noise', default_value='0.03',
+        description='LiDAR range noise standard deviation, metres. 0.0 for none')
+
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
         parameters=[{
-            'robot_description': robot_description,
-            'use_sim_time': True,
+            'robot_description': ParameterValue(
+                Command(['xacro ', xacro_path, ' lidar_noise:=', lidar_noise]),
+                value_type=str),
         }],
     )
 
@@ -134,6 +138,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_y,
+        declare_lidar_noise,
         declare_yaw,
         declare_target_x,
         declare_speed,

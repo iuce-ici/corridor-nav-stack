@@ -27,6 +27,8 @@
   <xacro:property name="lidar_z"     value="1.0"/>
   <xacro:property name="lidar_pitch" value="0.20944"/>  <!-- 12 deg, nose down -->
 
+  <xacro:arg name="lidar_noise" default="0.03"/>
+
   <material name="steel">  <color rgba="0.55 0.58 0.60 1"/></material>
   <material name="rubber"> <color rgba="0.15 0.15 0.15 1"/></material>
 
@@ -276,7 +278,9 @@
           <resolution>0.01</resolution>
         </range>
         <noise>
-          <type>none</type>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>$(arg lidar_noise)</stddev>
         </noise>
       </lidar>
     </sensor>

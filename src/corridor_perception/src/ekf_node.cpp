@@ -14,13 +14,11 @@
 // h(state) = [y, theta], so H is constant. Signs verified: offset by Part 5,
 // heading by stationary spawns at +3 and -3 deg.
 //
-// R covers the extraction's systematic error with range noise off (about
-// 0.44 mm and 0.06 mrad), not noise: see analyse_run.py. Because that error
-// repeats identically every scan, the claimed lateral uncertainty will end up
-// several times smaller than the actual lateral error. Expected, not a bug.
-// Longitudinal position x is unobservable in a straight corridor, and the one
-// percent wheel radius error is not in P, so P_xx will badly understate the
-// actual x error. Also expected.
+// R is measured, not chosen: with 3 cm of LiDAR range noise the fitted offset
+// scatters by 0.73 mm and the heading by 0.0546 mrad scan to scan (about 2070
+// points per wall fit, so the line fit averages the per point noise down by
+// roughly the square root of N). Lag one correlation about -0.04, so the scan
+// to scan errors are independent, as the filter assumes.
 //
 // Publishes /odom_ekf (pose and the x, y, yaw block of P) and /ekf/state
 // (state and full P) on every predict step, and /ekf/update on every update.
@@ -52,8 +50,8 @@ public:
     // itself starts at 0: the filter must discover the bias, not be told it.
     sigma_b0_ = this->declare_parameter<double>("sigma_b0", 8.7266e-4);
     // Measurement standard deviations: lateral offset (m) and heading (rad).
-    const double r_y = this->declare_parameter<double>("r_y", 5.0e-4);
-    const double r_theta = this->declare_parameter<double>("r_theta", 1.0e-4);
+    const double r_y = this->declare_parameter<double>("r_y", 7.3e-4);
+    const double r_theta = this->declare_parameter<double>("r_theta", 5.46e-5);
  
     R_ << r_y * r_y, 0.0,
           0.0,       r_theta * r_theta;
