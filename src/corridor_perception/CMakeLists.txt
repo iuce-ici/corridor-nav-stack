@@ -59,4 +59,8 @@ install(TARGETS obstacle_tracking DESTINATION lib/${PROJECT_NAME})
 install(TARGETS corridor_geometry
   DESTINATION lib/${PROJECT_NAME})
 
+add_executable(cost_grid src/cost_grid_node.cpp)
+ament_target_dependencies(cost_grid rclcpp nav_msgs corridor_msgs)
+install(TARGETS cost_grid DESTINATION lib/${PROJECT_NAME})
+
 ament_package()

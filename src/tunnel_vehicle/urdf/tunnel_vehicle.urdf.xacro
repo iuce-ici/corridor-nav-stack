@@ -260,7 +260,12 @@
       <lidar>
         <scan>
           <horizontal>
-            <samples>361</samples>
+            <!-- 360, not 361. With 361 samples over +-90 deg, one beam sits
+                 exactly on -45 deg, and Gazebo's gpu_lidar returns the +45 deg
+                 ranges there, in every scan. Measured 2 Nov 2026: about 3 m of
+                 error on that column, none elsewhere; with 360 samples no beam
+                 lands on 45 deg and the defect is gone. Step 0.5014 deg. -->
+            <samples>360</samples>
             <resolution>1</resolution>
             <min_angle>-1.5707963</min_angle>
             <max_angle>1.5707963</max_angle>

@@ -168,6 +168,15 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     )
 
+    # Phase 3d-1. Rebuilt from scratch every scan from the corridor geometry
+    # and the confirmed tracks; ticks on /obstacle_tracks.
+    cost_grid = Node(
+        package='corridor_perception',
+        executable='cost_grid',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
+    )
+
     run_controller = Node(
         package='corridor_experiments',
         executable='run_controller',
@@ -194,6 +203,7 @@ def generate_launch_description():
                 corridor_geometry,
                 obstacle_extraction,
                 obstacle_tracking,
+                cost_grid,
                 # Motion begins after spawn settling has decayed. Driving through
                 # the settling transient would put a startup artefact in the first
                 # metre of every run.

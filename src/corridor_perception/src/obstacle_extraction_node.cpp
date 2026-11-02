@@ -142,7 +142,7 @@ public:
   ObstacleExtractionNode() : Node("obstacle_extraction")
   {
     z_min_ = declare_parameter("z_min", 0.1);
-    z_max_ = declare_parameter("z_max", 5.0);
+    z_max_ = declare_parameter("z_max", 4.5);
     // Same value the wall fit rejects at, so a point is either a wall point
     // upstream or an obstacle point here, never both and never neither.
     wall_margin_ = declare_parameter("wall_margin", 0.30);
