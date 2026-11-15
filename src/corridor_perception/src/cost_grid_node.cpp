@@ -53,12 +53,20 @@
 //   0.22 m. lateral_pad is added to each side to cover it; it is a fixed
 //   bound, not range dependent.
 //
-// Nothing is published when the corridor geometry is missing, stale or
+// Nothing is published when the corridor geometry of THIS scan is missing or
 // invalid. An all-free grid would assert the corridor is clear, which is not
 // the same statement as not knowing where the walls are.
 //
 // The grid ticks on /obstacle_tracks, which arrives once per scan whenever
 // the tracker has a pose, with an empty array when nothing is tracked.
+// Tracks and geometry come from the same scan and carry its stamp, so they
+// are paired by exact stamp. The two topics have no ordering guarantee: in
+// 3d-2 the tracks of a scan reached this node before that scan's geometry on
+// about 3 % of scans, and the grid was then built from the previous scan's
+// geometry, which once published a grid on a scan whose geometry was
+// invalid (criterion P8). So tracks that arrive first are held until their
+// geometry arrives; tracks whose geometry has not come within hold_timeout
+// are dropped, and nothing is published for them.
 
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -69,6 +77,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -87,7 +96,7 @@ public:
     lateral_pad_ = declare_parameter("lateral_pad", 0.5);
     lateral_cost_max_ = std::clamp<int64_t>(
       declare_parameter("lateral_cost_max", 98), 0, 98);
-    geometry_timeout_ = declare_parameter("geometry_timeout", 0.2);
+    hold_timeout_ = declare_parameter("hold_timeout", 0.5);
     frame_ = declare_parameter("frame", std::string("base_link"));
 
     nx_ = static_cast<int>(std::lround(x_max_ / resolution_)) + 1;
@@ -97,10 +106,7 @@ public:
 
     geo_sub_ = create_subscription<corridor_msgs::msg::CorridorGeometry>(
       "/corridor_geometry", rclcpp::SensorDataQoS(),
-      [this](const corridor_msgs::msg::CorridorGeometry::SharedPtr msg) {
-        last_geo_ = *msg;
-        have_geo_ = true;
-      });
+      std::bind(&CostGridNode::on_geometry, this, std::placeholders::_1));
 
     // Best effort subscription: compatible with a reliable or a best effort
     // publisher, so it does not depend on how the tracker declared its QoS.
@@ -116,18 +122,52 @@ public:
   }
 
 private:
+  static int64_t stamp_ns(const builtin_interfaces::msg::Time & t)
+  {
+    return static_cast<int64_t>(t.sec) * 1000000000LL + t.nanosec;
+  }
+
+  void on_geometry(const corridor_msgs::msg::CorridorGeometry::SharedPtr msg)
+  {
+    const int64_t s = stamp_ns(msg->header.stamp);
+    geo_[s] = msg;
+    while (geo_.size() > 40) { geo_.erase(geo_.begin()); }   // 2 s at 20 Hz
+    // Tracks of this scan that arrived before its geometry.
+    const auto it = held_.find(s);
+    if (it != held_.end()) {
+      const auto tracks = it->second;
+      held_.erase(it);
+      build(tracks, *msg);
+    }
+  }
+
   void on_tracks(const corridor_msgs::msg::ObstacleTrackArray::SharedPtr msg)
   {
-    if (!have_geo_ || !last_geo_.valid) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "no valid corridor geometry: not publishing a cost grid");
+    const int64_t s = stamp_ns(msg->header.stamp);
+
+    // Held tracks whose geometry never came: drop them, publish nothing.
+    const int64_t hold_ns = static_cast<int64_t>(hold_timeout_ * 1e9);
+    for (auto it = held_.begin(); it != held_.end() && it->first < s - hold_ns;) {
+      it = held_.erase(it);
+      ++dropped_;
+    }
+
+    const auto g = geo_.find(s);
+    if (g == geo_.end()) {
+      held_[s] = msg;
+      ++held_count_;
       return;
     }
-    const double age =
-      (rclcpp::Time(msg->header.stamp) - rclcpp::Time(last_geo_.header.stamp)).seconds();
-    if (std::abs(age) > geometry_timeout_) {
+    build(msg, *g->second);
+  }
+
+  void build(const corridor_msgs::msg::ObstacleTrackArray::SharedPtr & msg,
+             const corridor_msgs::msg::CorridorGeometry & geo)
+  {
+    if (!geo.valid) {
+      ++silent_invalid_;
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "corridor geometry is %.3f s from these tracks: not publishing a cost grid", age);
+        "no valid corridor geometry for this scan: not publishing a cost grid");
       return;
     }
 
@@ -135,10 +175,10 @@ private:
 
     // Centreline in base_link, inverting corridor_geometry exactly as
     // obstacle_extraction does: heading = -atan(m), offset = -c / sqrt(1 + m^2).
-    const double m = -std::tan(last_geo_.heading_error);
+    const double m = -std::tan(geo.heading_error);
     const double norm = std::sqrt(1.0 + m * m);
-    const double c = -last_geo_.lateral_offset * norm;
-    const double half_w = 0.5 * last_geo_.corridor_width;
+    const double c = -geo.lateral_offset * norm;
+    const double half_w = 0.5 * geo.corridor_width;
 
     // Distances from the centreline beyond which a wall is lethal, and beyond
     // which a new path may not go.
@@ -147,7 +187,7 @@ private:
     if (wall_block <= 0.0) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
         "corridor width %.2f m leaves no plannable band: not publishing",
-        last_geo_.corridor_width);
+        geo.corridor_width);
       return;
     }
 
@@ -225,8 +265,9 @@ private:
         return s[std::min(s.size() - 1, static_cast<size_t>(q * static_cast<double>(s.size())))];
       };
       RCLCPP_INFO(get_logger(),
-        "build time over %zu grids: median %.3f ms, p99 %.3f ms, max %.3f ms",
-        s.size(), at(0.5), at(0.99), s.back());
+        "build time over %zu grids: median %.3f ms, p99 %.3f ms, max %.3f ms; "
+        "tracks held for their geometry %zu, dropped %zu; scans silent on invalid geometry %zu",
+        s.size(), at(0.5), at(0.99), s.back(), held_count_, dropped_, silent_invalid_);
     }
   }
 
@@ -234,11 +275,12 @@ private:
   rclcpp::Subscription<corridor_msgs::msg::CorridorGeometry>::SharedPtr geo_sub_;
   rclcpp::Subscription<corridor_msgs::msg::ObstacleTrackArray>::SharedPtr trk_sub_;
 
-  corridor_msgs::msg::CorridorGeometry last_geo_;
-  bool have_geo_ = false;
+  std::map<int64_t, corridor_msgs::msg::CorridorGeometry::SharedPtr> geo_;     // by stamp
+  std::map<int64_t, corridor_msgs::msg::ObstacleTrackArray::SharedPtr> held_; // by stamp
+  size_t held_count_ = 0, dropped_ = 0, silent_invalid_ = 0;
 
   double resolution_, x_max_, y_half_, tight_radius_, loose_radius_;
-  double lateral_pad_, geometry_timeout_;
+  double lateral_pad_, hold_timeout_;
   int64_t lateral_cost_max_;
   std::string frame_;
   int nx_ = 0, ny_ = 0;

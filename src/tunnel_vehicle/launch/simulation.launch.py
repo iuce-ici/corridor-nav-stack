@@ -177,6 +177,15 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     )
 
+    # Phase 3d-2. A* over /cost_grid, forward only, every grid. Publishes
+    # /planned_path; an empty path means blocked, silence means no grid.
+    path_planner = Node(
+        package='corridor_perception',
+        executable='path_planner',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
+    )
+
     run_controller = Node(
         package='corridor_experiments',
         executable='run_controller',
@@ -204,6 +213,7 @@ def generate_launch_description():
                 obstacle_extraction,
                 obstacle_tracking,
                 cost_grid,
+                path_planner,
                 # Motion begins after spawn settling has decayed. Driving through
                 # the settling transient would put a startup artefact in the first
                 # metre of every run.

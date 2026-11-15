@@ -63,4 +63,8 @@ add_executable(cost_grid src/cost_grid_node.cpp)
 ament_target_dependencies(cost_grid rclcpp nav_msgs corridor_msgs)
 install(TARGETS cost_grid DESTINATION lib/${PROJECT_NAME})
 
+add_executable(path_planner src/path_planner_node.cpp)
+ament_target_dependencies(path_planner rclcpp nav_msgs geometry_msgs corridor_msgs)
+install(TARGETS path_planner DESTINATION lib/${PROJECT_NAME})
+
 ament_package()
