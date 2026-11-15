@@ -13,22 +13,25 @@ Localisation by EKF fusing wheel odometry, IMU yaw rate, and a LiDAR derived
 lateral offset and heading relative to the corridor centreline. No prior map, no
 GNSS, no SLAM.
 
-Three lateral controllers (pure pursuit, Stanley, LQR on a bicycle model state
-space) are compared on a single metric harness: cross track error RMS and max,
-heading error, control effort, compute time, and degradation under injected
-sensor noise and disturbance.
+Obstacles are detected in the same LiDAR scan, tracked across scans on the EKF's
+motion estimate, and turned into a cost grid that an A\* planner searches every
+scan. A pure pursuit controller then follows the planned path on the EKF
+estimate. A comparison of pure pursuit against Stanley and LQR on one metric
+harness follows v1.0.
 
 **This is not a wall follower.** The wall measurement corrects an estimate; the
-controller tracks the centreline using that estimate and never sees the LiDAR.
-Only the measurement model, about 100 lines, is corridor specific. The EKF,
-process model, controllers, bicycle model and metric harness are environment
+controller tracks a path using that estimate and never sees the LiDAR. In
+localisation, only the measurement model, about 100 lines, is corridor
+specific. The EKF, process model and planner search are environment
 independent.
 
-**Status: Phase 1 complete, 4 September 2026. Phase 2 next.** Numbers in this
-README are filled in as each phase closes and are absent until then. Everything
-reported here is measured in simulation. Simulation exercises the algorithms; it
-does not validate them against hardware, and no claim here should be read as a
-hardware result.
+**Status, 15 November 2026: Phases 0 to 2 complete. Phase 3 in progress:
+obstacle scenarios, extraction, tracking, cost grid and A\* planning are
+complete and verified; bounded obstacle shadows, path following and the demo
+run come next.** Numbers in this README are filled in as each part closes and
+are absent until then. Everything reported here is measured in simulation.
+Simulation exercises the algorithms; it does not validate them against
+hardware, and no claim here should be read as a hardware result.
 
 ## Milestones
 
@@ -37,11 +40,33 @@ hardware result.
 | 0 | Tooling floor, off the shelf robot | C++ node written by hand, rosbag recorded and replayed, repository exists | complete |
 | 1 | Vehicle and corridor build, corridor geometry extraction, dead reckoned odometry | Offset and heading against Gazebo ground truth with error statistics and timing, documented odometry drift curve | **complete** |
 | 2 | EKF localisation | Pose RMSE against ground truth, with and without the LiDAR update, written account of Q and R selection and of behaviour under mistuning | **complete** |
-| 3 | Pure pursuit and Stanley, metric harness | Both closed loop on the EKF estimate, full metric table, lookahead swept | not started |
-| 4 | LQR on own bicycle model state space | Three way comparison table including noise and disturbance cases, written verdict | not started |
-| 5 | Ship | README with all numbers, architecture diagram, Docker, CI, demo video, one command clone and run | not started |
+| 3 | Obstacles, planning and path following | Per part criteria written before the runs that test them (table below) | **in progress** |
+| 4 | Controller comparison: pure pursuit, Stanley, LQR on own bicycle model state space | Three way comparison table including noise and disturbance cases, written verdict | after v1.0 |
+| 5 | Ship | Docker, CI, one command clone and run | after v1.0 |
 
-Target for v1.0: 15 November 2026.
+The original plan compared the three lateral controllers before handling
+obstacles. Obstacle avoidance was moved first, on 19 October 2026, because a
+vehicle that cannot pass an obstacle cannot be demonstrated in a tunnel, and the
+controller comparison is more meaningful on paths that actually bend.
+
+### Phase 3 parts
+
+| Part | Content | Status |
+|---|---|---|
+| 3a | Obstacle scenarios in the world generator | complete |
+| 3b | Obstacle extraction from the point cloud | complete |
+| 3c | Obstacle tracking, and a detector fragmentation fix | complete |
+| 3d-1 | Cost grid, and a Gazebo LiDAR defect found and fixed | complete |
+| 3d-2 | A\* planner with a side rule, and two message ordering races fixed | complete |
+| 3d-3 | Rolling path buffer, validate or extend, bounded obstacle shadows | next |
+| 3d-4 | Path smoothing and curvature check | |
+| 3e | Pure pursuit on the EKF estimate | |
+| 3f | Metrics, demo run | |
+
+**v1.0 is complete when** the vehicle drives itself from A to B through the
+8 m by 8 m corridor with static obstacles on both sides, including obstacles on
+opposite sides in view at the same time, with a video of the run and the
+measured clearance, tracking and localisation numbers behind it.
 
 ## Phase 1 results
 
@@ -308,6 +333,203 @@ correlations. A sign error on `x` is invisible at zero heading and needs the 60
 degree case. A four times too large `Q` is hidden by the bias in both of those
 and needs the case with no bias at all.
 
+## Phase 3 results so far
+
+Every part below had its exit criteria written before the runs that tested
+them, and every checker was first fed deliberately broken synthetic data to
+show it could fail.
+
+### 3a: obstacle scenarios
+
+`generate_corridor.py` takes a scenario name and writes the world plus a JSON
+sidecar of the obstacle truth, so every analysis reads placements from one
+place. With no argument it reproduces `corridor.sdf` byte for byte, so the
+Phase 1 and 2 results stay reproducible.
+
+Obstacles are static boxes, 1.2 by 1.2 by 1.5 m unless a scenario says
+otherwise, at least 1 m clear of both walls. Height 1.5 m against a LiDAR at
+z = 1.0 means a far obstacle returns a handful of points on one or two layers,
+which is the realistic case.
+
+| Scenario | Obstacles (x, y of centre) | Tests |
+|---|---|---|
+| `single_left`, `single_right` | (50, 0.6), (50, -0.6) | side decision, one obstacle |
+| `slalom` | (40, 0.8), (70, -0.8) | fragmentation, side faces |
+| `narrow`, `late` | (50, 1.0), (18, 0.0) | tight gap; obstacle too close to steer round |
+| `blocked` | three boxes at x 50 wall to wall | no path |
+| `centre` | (50, 0.0), 0.6 m wide | an exact tie between left and right |
+| `pair` | (40, 2.2), (52, 0.5) | two obstacles in view at once |
+| `tandem` | (40, 0.6), (48, 0.6) | second obstacle hidden behind the first |
+
+### 3b: obstacle extraction
+
+Per scan, in `base_link`: keep points in a z band of 0.10 to 4.5 m, drop those
+within 0.30 m of either wall using the published corridor geometry rather than
+refitting, and connect occupied cells of a 0.25 m grid. A uniform grid rather
+than DBSCAN: an obstacle returns 5 points at 30 m and about 40 at 10 m, so
+there is nothing for a density method to earn. Nothing is published when the
+geometry is missing or invalid, since an empty array would assert the corridor
+is clear.
+
+`single_left`, 3 cm range noise: first detection at 29.94 m with 5 points,
+against a sensor geometry prediction of 30 m. Detection rate 1.00 at every
+range inside 30 m, no false positives, lateral error within 54 mm.
+
+The near face is reported as the minimum over N noisy points, which is biased
+low by about sigma times the square root of 2 ln N: 82 mm measured at 217
+points, 36 mm at 6. It reports the obstacle nearer than it is, which is the
+correct direction for avoidance.
+
+### 3c: tracking, and a fragmentation fix
+
+A two state Kalman filter per track in `base_link`, carried between scans by
+the EKF's motion estimate. No velocity state: obstacles are static, so the only
+motion to model is the vehicle's own. Mahalanobis gating, greedy association,
+confirmation after 3 hits, deletion after 10 misses.
+
+An obstacle offset laterally shows its side face to the sensor at grazing
+incidence, which returns isolated vertical columns about 0.7 m behind the near
+face rather than a connected surface. The clustering reported one obstacle as
+two, and the fragment became a phantom track. A merge step was added whose
+threshold is the narrowest gap the vehicle could pass through: two clusters
+closer than that are one obstacle by definition. The defect was invisible in
+`single_left`, where the side face lies exactly in the sensor plane, and
+appeared at once in `slalom`. It was found by running a second scenario, not by
+re-reading the code.
+
+| Measure | Before | After |
+|---|---|---|
+| Split fraction, 5 to 10 m | 0.73 | 0.00 in every range band |
+| Phantom tracks | 151 | 0 |
+| Track ids per obstacle | several | one |
+| Lateral jitter | 13 mm | 5 mm |
+| Forced detection outages | | 93 coasting scans, no track lost, worst error 92 mm |
+
+### 3d-1: cost grid
+
+Rebuilt every scan in `base_link`: x 0 to 30 m, y plus or minus 6 m, 0.25 m
+cells centred on multiples of the cell size, so the vehicle origin is a cell
+centre. Values: 100 lethal, 99 blocked for new paths only, 0 to 98 a lateral
+cost quadratic in distance from the fitted centreline, so the cheapest path
+through an empty corridor is the centre and the vehicle returns there by
+itself.
+
+Radii: tight 1.0 m (0.9 m half width at the outer wheel faces plus 0.1 m of
+steered wheel swing at 12 degrees), loose 1.3 m (plus 0.3 m clearance). The
+same radii apply to walls and obstacles; the 0.3 m between them is the replan
+hysteresis.
+
+Two corrections to obstacles, both measured on the 3c runs rather than assumed:
+
+- **Depth is unobservable.** The reported length stayed at 0.07 to 0.16 m at
+  every range against a true 1.2 m. Each obstacle is therefore treated as
+  extending from its near face to the end of the grid. Unseen is not free.
+- **Width is short.** An edge on corner loses about one azimuth step; an
+  ordinary edge lost up to 1.28 steps at 10 to 20 m, mechanism not identified.
+  The worst per side loss over every scan was 0.22 m, so each side is padded
+  0.5 m.
+
+| Criterion, against ground truth | Result |
+|---|---|
+| C1: every minimum cost cell within 0.25 m of the true centreline, clear corridor, 1 m offset spawn | PASS, 320 grids, worst 0.000 m |
+| C2: wall bands within 0.02 m of truth | PASS, 320 grids |
+| C3: the true box lethal, no lethal cell beyond tight + 0.15 m in front or tight + 0.6 m beside | PASS, 201 grids, worst excess 0.000 m |
+| C4: build time p99 under 5 ms | PASS, p99 1.43 and 1.99 ms |
+
+### A defect in Gazebo's LiDAR, found by C2
+
+C2 failed in an empty corridor with the vehicle 1 m off centre: a confirmed
+obstacle where there was none, 70 track ids in 15 s, always at y = -3.0. At
+y = 0 the phantom fell on the opposite wall and was discarded as wall, which is
+why 3b and 3c never saw it. Varying the spawn offset turned it into a
+falsifiable hypothesis: at 1.5 m off centre the phantom was predicted at
+y = -2.5 and measured at -2.506.
+
+With 361 horizontal samples over plus or minus 90 degrees, Gazebo's
+`gpu_lidar` returned, in every scan, at azimuth exactly -45 degrees, the ranges
+that belong to +45 degrees, on every layer that reaches a wall, and only in that
+direction. The returns were found in the raw point cloud, before any node in
+this stack, and confirmed against exact ray cast truth for every beam: one
+column, about 3 m of error, everything else within the known range noise. It
+depends on a beam lying exactly on 45 degrees. With 360 samples (0.5014 degree
+step) there are 0 impossible returns and no new bad column. 360 is now locked,
+with the reason in the sensor description, and
+`analyse_impossible_points.py` is a standing regression check. No public report
+of this behaviour was found; it may be specific to this configuration.
+
+### 3d-2: A\* planner and the side decision
+
+A\* over the cost grid, rebuilt every scan, from the vehicle origin to any cell
+of the last column: no goal pose and no map. Moves are forward only, one row to
+either side per column, so the path has one y per x and the side on which it
+passes an obstacle is unambiguous. Cells at 99 and 100 cannot be entered. An
+empty path means blocked; nothing published means the walls are not known.
+
+**Side flips came from exact ties.** With an obstacle on the centreline and
+plain A\*, the path changed side 144 times in 391 grids. 389 of those grids were
+exact ties: the cells hold integers, so a symmetric layout gives two paths of
+identical cost, and the side was decided by the order of the priority queue.
+3 cm range noise moves the obstacle's near face within a 25 mm band even with
+the vehicle standing still, enough to push cells across a threshold and reorder
+the queue. The planner itself is deterministic: identical grids gave identical
+paths in 85 of 85 cases.
+
+**The side rule**, per confirmed track, nearest first: if only one side of the
+obstacle has any open cell, take it without searching; otherwise search both
+and go **right unless left is cheaper by more than 3 percent**, following right
+hand traffic. A side once chosen is kept unless the other becomes cheaper by
+more than 10 percent or it closes, remembered per track id. A sweep of obstacle
+positions showed side margins are either under 1 percent or over 6 percent on
+this grid, with nothing in between, so 3 percent sits in the empty range and
+10 percent allows at most one switch per obstacle. Result: 0 flips on the same
+scenario, in three runs.
+
+**Two message ordering races.** Two topics computed from the same scan carry no
+ordering guarantee between them. The planner received a grid before that
+scan's tracks on about 3 percent of scans, and then planned without the rule.
+The cost grid received a scan's tracks before that scan's geometry on about 60
+percent, and so built most grids from the previous scan's geometry, once
+publishing a grid on a scan whose geometry was invalid. Both now pair messages
+by exact stamp and hold the earlier one until its partner arrives.
+
+**Timing budget.** Planner compute time was first held to a fixed 5 ms, set
+when the planner ran one search; the side rule can run more, and three runs
+exceeded it (5.3 to 6.2 ms). The commit that first closed this part reported a
+pass; that was wrong, and the next commit says so. The limit is now derived
+from the measured pipeline: the path must describe a world no older than one
+scan, so scan to path p99 at most 50 ms, and the planner's share is
+(50 ms - U99 - 5 ms reserved for the path follower) / 2, where U99 is the p99
+from scan to grid.
+
+| Stage, after the scan | median | p99 |
+|---|---|---|
+| geometry | 9.96 ms | 15.46 ms |
+| obstacles | 9.47 ms | 14.33 ms |
+| tracks | 9.80 ms | 14.96 ms |
+| cost grid | 10.82 ms | 16.40 ms |
+| path | 12.31 ms | 17.73 ms |
+
+These are recorder receive times, so the transport of the point cloud is inside
+every number: an upper bound. U99 16.40 ms gives a planner limit of 14.30 ms.
+
+| Criterion | Result |
+|---|---|
+| P1 validity: legal moves, no cell at 99 or above, reaches the last column | PASS, every run |
+| P2 optimality: cost equals an independent exact search under the sides the rule picks, rule re-applied independently | PASS, every run |
+| P3 centreline: from 10 m ahead, within 0.25 m of the true centreline | PASS, worst 0.000 m |
+| P4 side: expected side on every confirmed grid, no flips | PASS: forced sides, the centred tie (0 flips), two obstacles in view at once |
+| P5 no path while the corridor is blocked | PASS, 218 of 218 grids |
+| P6 start at the vehicle origin | PASS |
+| P7 planner p99 under 14.30 ms; scan to path p99 under 50 ms | PASS, at most 6.2 ms; 17.73 ms |
+| P8 silent on invalid geometry | PASS, 46 invalid scans, 0 paths |
+
+**Known limit, to be removed in 3d-3.** Because an obstacle's shadow runs to the
+end of the grid, two obstacles visible at once on opposite sides cover the whole
+plannable width, and the vehicle would stop before the first. The candidate
+fixes are clearing the shadow where LiDAR rays have passed behind the obstacle
+to the far wall, an assumed maximum obstacle length, or a side looking short
+range sensor that measures length while passing.
+
 ## Configuration
 
 Every number below is fixed and any change to one invalidates results measured
@@ -334,9 +556,14 @@ both kinematic.
 Mounted at x 4.2, y 0, z 1.0 in `base_link`, with a 0.2 m standoff ahead of the
 front face so the outermost beams do not graze the bodywork. Pitched 12 degrees
 nose down to centre an asymmetric vertical field of view. Sixteen layers,
-uniform spacing, sensor frame -7.2 to +34.3 degrees. 180 degrees horizontal, 361
-samples at 0.5 degrees, the front mount being occluded to the rear by its own
-vehicle. 20 Hz, giving the 50 ms frame period used in service. Maximum range
+uniform spacing, sensor frame -7.2 to +34.3 degrees. 180 degrees horizontal, 360
+samples at 0.5014 degrees, the front mount being occluded to the rear by its own
+vehicle. 360 rather than 361 avoids a beam exactly on 45 degrees, where Gazebo
+returns the wrong ranges (Phase 3, 3d-1). Phases 1 and 2 were measured with 361
+samples. The affected column is about 14 returns against about 2000 per wall
+fit; at a centred spawn it lands on the opposite wall itself, and off centre it
+lies well outside the 0.30 m rejection band. Its effect on those results is
+expected to be negligible and has not been re-measured. 20 Hz, giving the 50 ms frame period used in service. Maximum range
 30.0 m, capped well below corridor length so the extraction sees the same class
 of scene throughout. Range noise is a launch argument, `lidar_noise`, standard deviation in metres,
 default 0.03. That is the figure for a sixteen layer sensor of this class.
@@ -380,6 +607,19 @@ perpendicular, ten times the far field reconstruction noise and two orders of
 magnitude below the arc separation. Maximum residual for a `valid` flag 0.05 m,
 against 0.013 m in normal operation and 0.16 m when degraded.
 
+### Obstacle pipeline parameters
+
+| Node | Parameter | Value |
+|---|---|---|
+| `obstacle_extraction` | z band, wall margin, cell, minimum points, merge gap, maximum x | 0.10 to 4.5 m, 0.30 m, 0.25 m, 4, 1.0 m, 30 m |
+| `obstacle_tracking` | process noise, measurement noise, gate, confirm, drop | 0.020 m, 0.050 m, 9.21, 3 hits, 10 misses |
+| `cost_grid` | resolution, extent, tight and loose radii, lateral pad, hold limit | 0.25 m, x 0 to 30 by y plus or minus 6 m, 1.0 and 1.3 m, 0.5 m, 0.5 s |
+| `path_planner` | centre weight, blocked from, side bias, side switch | 1.0, 99, 3 percent, 10 percent |
+
+The 4.5 m upper z bound is the vehicle roof at 4.0 m plus 0.5 m. It is a design
+decision not yet verified: no scenario has an overhead obstacle that could tell
+4.5 from 5.0.
+
 ## Build and run
 
 ```
@@ -387,10 +627,10 @@ colcon build
 source install/setup.bash
 ```
 
-A single launch brings up the world, the vehicle, transforms, the bridge, dead
-reckoning and the run controller. Both nodes start from the spawn completion
-event rather than from a launch timer, so ordering holds regardless of how long
-Gazebo takes to load.
+A single launch brings up the world, the vehicle, transforms, the bridge, the
+localisation, perception and planning nodes, and the run controller. The nodes
+start from the spawn completion event rather than from a launch timer, so
+ordering holds regardless of how long Gazebo takes to load.
 
 ```
 # terminal 1: start recording before the launch so nothing is missed
@@ -403,8 +643,24 @@ ros2 launch tunnel_vehicle simulation.launch.py \
   y:=0.0 target_x:=110.0 speed:=2.0 lidar_noise:=0.03 seed:=42
 ```
 
-Arguments: `y` sets the lateral spawn offset, `yaw` the spawn heading in radians,
-`target_x` the absolute x at which the run terminates, `speed` the commanded
+The obstacle worlds are generated and committed (`corridor_<scenario>.sdf`);
+select one by name. After editing a scenario, rerun `generate_corridor.py
+<scenario>` in `src/corridor_sim/worlds` and rebuild `corridor_sim`.
+
+```
+ros2 launch tunnel_vehicle simulation.launch.py world:=corridor_centre target_x:=40.0
+
+ros2 bag record -s mcap -o bags/NAME /scan/points /obstacles /cost_grid \
+  /planned_path /model/vehicle/pose /obstacle_tracks /corridor_geometry
+
+python3 src/corridor_experiments/scripts/analyse_planner.py bags/NAME \
+  --obstacles 50,0 --sides A
+python3 src/corridor_experiments/scripts/analyse_latency.py bags/NAME
+```
+
+Arguments: `world` selects the generated world, `y` sets the lateral spawn
+offset, `yaw` the spawn heading in radians, `target_x` the absolute x at which
+the run terminates, `speed` the commanded
 forward speed, `lidar_noise` the LiDAR range noise standard deviation in metres,
 and `seed` the Gazebo random seed. The vehicle spawns at x = 10, so
 `target_x:=110.0` gives 100 m of travel.
@@ -447,10 +703,14 @@ src/
   corridor_msgs/        custom interfaces
   corridor_perception/  system under test
     src/corridor_geometry_node.cpp
-        src/dead_reckoning_node.cpp
+    src/dead_reckoning_node.cpp
     src/ekf_node.cpp
+    src/obstacle_extraction_node.cpp
+    src/obstacle_tracking_node.cpp
+    src/cost_grid_node.cpp
+    src/path_planner_node.cpp
   corridor_experiments/ test apparatus
-        src/run_controller.cpp
+    src/run_controller.cpp
     scripts/ekf_predict_consistency.py   predict step against Monte Carlo
     scripts/analyse_drift.py             Phase 1 drift curve
     scripts/analyse_run.py               corridor geometry against truth
@@ -458,6 +718,12 @@ src/
     scripts/analyse_ekf_update.py        EKF criteria for one run
     scripts/sweep_seeds.sh               ten seed sweep
     scripts/aggregate_sweep.py           sweep summary
+    scripts/analyse_cost_grid.py         3d-1 criteria C1 to C3
+    scripts/analyse_impossible_points.py LiDAR regression check
+    scripts/analyse_column_errors.py     every beam against ray cast truth
+    scripts/analyse_planner.py           3d-2 criteria P1 to P8
+    scripts/analyse_latency.py           stage latency and the P7 budget
+    scripts/analyse_*.py                 further diagnostics, one question each
 ```
 
 The separation is deliberate. `corridor_experiments` is test apparatus and is
@@ -476,16 +742,26 @@ localisation this project exists to produce.
 
 **Height band, not the range image angle criterion.** The angle criterion
 separates ground from non ground. A wall and an obstacle are both non ground, so
-it answers the wrong question. The organised 16 by 361 structure and the `ring`
+it answers the wrong question. The organised 16 by 360 structure and the `ring`
 field are preserved regardless, because the range image is the fallback if the
 height band proves insufficient.
+
+**A uniform grid and A\*, not a sampling planner.** The corridor is narrow and
+the decision that matters is which side of each obstacle to pass, which a grid
+search over a cost field answers exactly, and an independent exact search can
+check every plan.
+
+**Messages from one scan are paired by stamp.** Two topics computed from the
+same scan arrive in either order. Every node that consumes two of them matches
+by exact stamp and holds the earlier one, rather than taking the latest.
 
 **Straight corridor only.** Curved bore geometry is out of scope for this
 project.
 
 **Plumbing borrowed, algorithms written.** Complete stacks exist that ship
 `robot_localization`, SLAM Toolbox and Nav2. They are read for URDF and SDF
-structure and never built upon. The EKF and the controllers are the project.
+structure and never built upon. The EKF, the obstacle pipeline, the planner and
+the controllers are the project; Nav2 is not used.
 
 ## Environment
 
@@ -496,13 +772,16 @@ OpenGL runs on Mesa llvmpipe software rendering. The host has an NVIDIA RTX 3070
 which is available for CUDA inside WSL, but the WSLg X server does not advertise
 DRI3, so the Mesa d3d12 driver falls back to software. Measured real time factor
 is 1.0 headless, 0.99 with the GUI on an empty world, and about 0.90 with the
-LiDAR running.
+LiDAR running. Since the obstacle pipeline was added it is about 0.6.
 
 No deliverable depends on frame rate. Simulation time is decoupled from wall
 clock, and node compute time is measured on the node rather than end to end
 through the simulator. Wall clock under WSL2 is not trustworthy for duration
-measurement: a backward jump of 2.6 s has been observed. All timing in this
-project comes from message header stamps.
+measurement: a backward jump of 2.6 s has been observed. Simulated durations
+come from message header stamps. Node compute times are measured inside each
+node on the monotonic clock. The Phase 3 pipeline latency uses the recorder's
+receive times, which are wall clock, so it is reported as an upper bound
+rather than an exact figure.
 
 ## Known limitations
 
@@ -519,5 +798,23 @@ project comes from message header stamps.
 - The claimed lateral uncertainty excludes the extraction's own systematic
   error, which is under 0.5 mm and varies with pose. No sensor here can
   separate it from a genuine offset.
+- Corridor geometry under occlusion: with an obstacle 5 to 10 m ahead close to
+  one wall, that wall's fit drops from about 2000 points to about 340, the
+  heading error reaches 4 to 5 mrad and the scan is still marked valid. To be
+  fixed before the path following results.
+- Obstacle shadows are unbounded, so obstacles on opposite sides in view at
+  once leave no path (3d-2). To be removed in 3d-3.
+- `obstacle_extraction` still takes the latest corridor geometry rather than the
+  same scan's; the race fixed in the cost grid remains there.
+- Static obstacles only. The tracker has no velocity state.
 - Every number is measured in simulation. Simulation exercises the algorithms;
   it does not validate them against hardware.
+
+## How this was built
+
+Every phase was planned as a sequence of small steps, each with an exit
+criterion written before the run that tested it, and a prediction made before
+each measurement. The design decisions, the derivations, the criteria and the
+debugging are the author's. Most of the C++ and Python was written with an AI
+coding assistant working under that direction, and every result reported here
+was checked against those criteria rather than taken on trust.
