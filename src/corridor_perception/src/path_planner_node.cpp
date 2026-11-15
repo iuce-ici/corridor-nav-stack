@@ -27,7 +27,10 @@
 // stamp, nearest first:
 //   "right of track k" closes, in the column of its near face, every cell
 //   whose centre is at or left of the track's y; "left" is the mirror image.
-//   With the nearer tracks' sides already fixed, the best path is found for
+//   If, in that column, only one side has any open cell (below blocked_from
+//   and not closed by a nearer track's side), that side is forced and no
+//   search is run; most decisions are of this kind (P7 cost). Otherwise,
+//   with the nearer tracks' sides already fixed, the best path is found for
 //   each side of track k, giving C_R and C_L, and m = (C_L - C_R) / min.
 //   Only one side passable: that side.
 //   New track:        right, unless m < -e (left cheaper by more than e).
@@ -269,29 +272,49 @@ private:
       for (const auto * t : order) {
         const int col = static_cast<int>(std::lround((t->x - G.ox) / G.res - 0.5));
         if (col <= G.si || col >= G.nx) { continue; }   // behind the start or beyond the grid
-        std::vector<char> shut_r = shut, shut_l = shut;
-        close_side(G, col, t->y, 'R', shut_r);
-        close_side(G, col, t->y, 'L', shut_l);
-        const double cr = search(G, shut_r, nullptr);
-        const double cl = search(G, shut_l, nullptr);
-        const bool fr = std::isfinite(cr), fl = std::isfinite(cl);
-        if (!fr && !fl) { continue; }     // nothing passes it: the final search says so
+
+        // Which sides have any open cell in the near face column? If only
+        // one does, the side is forced and costs no search; most decisions
+        // are of this kind. Only a real two sided case runs C_R and C_L.
+        bool open_r = false, open_l = false;
+        for (int j = 0; j < G.ny; ++j) {
+          const size_t k = static_cast<size_t>(j) * G.nx + col;
+          const int c = static_cast<int>(G.data[k]);
+          if (c >= blocked_from_ || c < 0 || shut[k]) { continue; }
+          const double yc = G.oy + (j + 0.5) * G.res;
+          if (yc < t->y) { open_r = true; } else if (yc > t->y) { open_l = true; }
+        }
+        if (!open_r && !open_l) { continue; }   // nothing passes it: the final search says so
 
         const auto it = committed_.find(t->id);
         char side;
-        if (fr && !fl) {
+        if (open_r && !open_l) {
           side = 'R';
-        } else if (fl && !fr) {
+          ++forced_;
+        } else if (open_l && !open_r) {
           side = 'L';
+          ++forced_;
         } else {
-          const double m = (cl - cr) / std::min(cl, cr);
-          if (it == committed_.end()) {
-            side = (m < -side_bias_) ? 'L' : 'R';
-          } else if (it->second == 'R') {
-            side = (m < -side_switch_) ? 'L' : 'R';
-          } else {
-            side = (m > side_switch_) ? 'R' : 'L';
+          std::vector<char> shut_r = shut, shut_l = shut;
+          close_side(G, col, t->y, 'R', shut_r);
+          close_side(G, col, t->y, 'L', shut_l);
+          const double cr = search(G, shut_r, nullptr);
+          const double cl = search(G, shut_l, nullptr);
+          const bool fr = std::isfinite(cr), fl = std::isfinite(cl);
+          if (!fr && !fl) { continue; }
+          if (fr && !fl) { side = 'R'; }
+          else if (fl && !fr) { side = 'L'; }
+          else {
+            const double m = (cl - cr) / std::min(cl, cr);
+            if (it == committed_.end()) {
+              side = (m < -side_bias_) ? 'L' : 'R';
+            } else if (it->second == 'R') {
+              side = (m < -side_switch_) ? 'L' : 'R';
+            } else {
+              side = (m > side_switch_) ? 'R' : 'L';
+            }
           }
+          ++searched_;
         }
         if (it != committed_.end() && it->second != side) { ++switches_; }
         committed_[t->id] = side;
@@ -337,9 +360,10 @@ private:
         "plan time over %zu grids: median %.3f ms, p99 %.3f ms, max %.3f ms; no path on %zu",
         s.size(), at(0.5), at(0.99), s.back(), no_path_);
       RCLCPP_INFO(get_logger(),
-        "side rule over %zu grids: decisions R %zu, L %zu; switches %zu; grids held for "
-        "their tracks %zu; planned without tracks %zu",
-        s.size(), decided_r_, decided_l_, switches_, held_count_, unmatched_);
+        "side rule over %zu grids: decisions R %zu, L %zu (forced %zu, searched %zu); "
+        "switches %zu; grids held for their tracks %zu; planned without tracks %zu",
+        s.size(), decided_r_, decided_l_, forced_, searched_, switches_, held_count_,
+        unmatched_);
     }
   }
 
@@ -360,6 +384,7 @@ private:
   std::vector<double> plan_ms_;
   size_t no_path_ = 0;
   size_t decided_r_ = 0, decided_l_ = 0, switches_ = 0, unmatched_ = 0;
+  size_t forced_ = 0, searched_ = 0;
 };
 
 int main(int argc, char ** argv)

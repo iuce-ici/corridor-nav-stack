@@ -131,13 +131,29 @@ def apply_side_rule(cells, ox, oy, res, si, sj, tracks, memory, stats):
         col = int(round((x - ox) / res - 0.5))
         if col <= si or col >= cells.shape[1]:
             continue
+        # A side with no open cell in the near face column is closed; if
+        # only one side has any, it is forced without a search.
+        yrow = oy + (np.arange(cells.shape[0]) + 0.5) * res
+        colv = cells[:, col]
+        open_cell = (colv < BLOCKED_FROM) & (colv >= 0)
+        open_r, open_l = bool((open_cell & (yrow < y)).any()), bool((open_cell & (yrow > y)).any())
         r = shut_side(cells, col, y, "R", oy, res)
         l = shut_side(cells, col, y, "L", oy, res)
-        cr, cl = exact_search(r, si, sj, res), exact_search(l, si, sj, res)
-        fr, fl = np.isfinite(cr), np.isfinite(cl)
-        if not fr and not fl:
+        if not open_r and not open_l:
             continue
-        if fr and not fl:
+        if open_r != open_l:
+            side = "R" if open_r else "L"
+            stats["forced"] = stats.get("forced", 0) + 1
+            fr = fl = None
+        else:
+            cr, cl = exact_search(r, si, sj, res), exact_search(l, si, sj, res)
+            fr, fl = np.isfinite(cr), np.isfinite(cl)
+            if not fr and not fl:
+                continue
+            stats["searched"] = stats.get("searched", 0) + 1
+        if fr is None:
+            pass
+        elif fr and not fl:
             side = "R"
         elif fl and not fr:
             side = "L"
@@ -317,7 +333,8 @@ def evaluate(grids, paths, poses, tracks, geoms, centreline=False,
                f"empty when a path exists: {p2_empty_wrong}, path when none exists: "
                f"{p2_path_when_none} -> {'PASS' if verdict['P2'] else 'FAIL'}")
     if rule_tracks is not None:
-        out.append(f"    side rule re-applied: decisions R {rule_stats['R']}, L {rule_stats['L']}, "
+        out.append(f"    side rule re-applied: decisions R {rule_stats['R']}, L {rule_stats['L']} "
+                   f"(forced {rule_stats.get('forced', 0)}, searched {rule_stats.get('searched', 0)}), "
                    f"switches {rule_stats['switches']}; path on the wrong side of a decided "
                    f"track {rule_stats['wrong side']}; grids not checked, tracks missing from "
                    f"the bag {rule_stats['no tracks']}")
