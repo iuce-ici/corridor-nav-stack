@@ -67,4 +67,8 @@ add_executable(path_planner src/path_planner_node.cpp)
 ament_target_dependencies(path_planner rclcpp nav_msgs geometry_msgs corridor_msgs)
 install(TARGETS path_planner DESTINATION lib/${PROJECT_NAME})
 
+add_executable(free_space src/free_space_node.cpp)
+ament_target_dependencies(free_space rclcpp sensor_msgs nav_msgs geometry_msgs std_msgs tf2_ros)
+install(TARGETS free_space DESTINATION lib/${PROJECT_NAME})
+
 ament_package()

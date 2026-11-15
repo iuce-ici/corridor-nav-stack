@@ -186,6 +186,15 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     )
 
+    # Phase 3d-3. 3D voxel memory of LiDAR evidence in the EKF frame;
+    # publishes /drivable beside the pipeline (0 drivable, 50 unknown, 100 occupied).
+    free_space = Node(
+        package='corridor_perception',
+        executable='free_space',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
+    )
+
     run_controller = Node(
         package='corridor_experiments',
         executable='run_controller',
@@ -214,6 +223,7 @@ def generate_launch_description():
                 obstacle_tracking,
                 cost_grid,
                 path_planner,
+                free_space,
                 # Motion begins after spawn settling has decayed. Driving through
                 # the settling transient would put a startup artefact in the first
                 # metre of every run.
