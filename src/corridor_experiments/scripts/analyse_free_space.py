@@ -4,7 +4,8 @@
 Replays every recorded scan into its own voxel memory, written independently
 of the node from the agreed rules, using the EKF pose the node reports it used
 (/free_space/pose), and compares the result with the node's /drivable grid
-scan by scan.
+scan by scan. The node numbers its scans; if the bag does not hold every one
+from the first, E4a and E1 are reported NOT VALID instead of PASS or FAIL.
 
   E1  evidence only: no cell the node calls drivable lacks floor evidence
       (a floor return or a beam through the floor voxel), a granted zone, or
@@ -30,6 +31,7 @@ Usage (from ~/ros2_ws):
       src/corridor_sim/worlds/corridor_SCENARIO.obstacles.json [--why] [--e2]
   --why  newly occupied voxels inside the zone, with the return they came from
   --e2   every drivable cell inside a true box: where, how deep, on what evidence
+  --diff every cell where the node and the replay disagree (first 30)
 Record: /scan/points /free_space/pose /free_space/mount /drivable /model/vehicle/pose
 """
 import json
@@ -225,6 +227,10 @@ def main():
     e2why = "--e2" in sys.argv
     if e2why:
         sys.argv.remove("--e2")
+    diffwhy = "--diff" in sys.argv
+    if diffwhy:
+        sys.argv.remove("--diff")
+    diffs = []
     e2rows = []          # (scan s, truth x, EKF minus truth x, face, depth, evidence, u, w, voxel y span)
     drift = []
     if len(sys.argv) != 3:
@@ -263,6 +269,19 @@ def main():
     z_near = z_near_granted = z_clear = z_clear_granted = 0
     zone_disagree = 0
     scans = sorted(data["/scan/points"].items())
+    # Scans the node used (it reported a pose) that the bag does not hold:
+    # their evidence is in the node's map but can never be in the replay.
+    have = set(data["/scan/points"])
+    used_missing = sorted(t for t in data["/free_space/pose"] if t not in have)
+    grids_missing = sum(1 for t in data["/free_space/pose"] if t not in data["/drivable"])
+    # The node numbers the scans it inserts (orientation.y, 1 for the first).
+    # The replay can only match if the bag holds every one of them from the
+    # first: a recorder that subscribed late, or a lost pose message, leaves
+    # evidence in the node's map that the replay can never have.
+    counts = [int(round(m.pose.orientation.y)) for _, m in sorted(data["/free_space/pose"].items())]
+    before = counts[0] - 1
+    gaps = sum(1 for a, b in zip(counts, counts[1:]) if b != a + 1)
+    complete = before == 0 and gaps == 0 and not used_missing
     for st, cl in scans:
         used = data["/free_space/pose"].get(st)
         if used is None:
@@ -310,6 +329,11 @@ def main():
                                                  px, py, pth, zone)
         val = np.where(foot, 0, val)
         mism += int((g != val).sum())
+        if diffwhy and len(diffs) < 30:
+            for r_, k_ in zip(*np.nonzero(g != val)):
+                if len(diffs) < 30:
+                    diffs.append((st / 1e9, px, XB[r_, k_], YB[r_, k_], int(g[r_, k_]), int(val[r_, k_]),
+                                  bool(ev[r_, k_])))
         drv = g == 0
         e1 += int((drv & ~(ev | zone_mask | foot_col | foot)).sum())
         WX = vx + ct * XB - stt * YB
@@ -362,9 +386,21 @@ def main():
             z_clear_granted += int(P.orientation.x > 0.5)
 
     print(f"bag: {sys.argv[1]}, scans compared {n}")
+    print(f"scans the node inserted before the recording caught its first: {before}; "
+          f"gaps in its count: {gaps}")
+    print(f"scans the node used but the bag lacks: {len(used_missing)}"
+          + (f" (first at {used_missing[0] / 1e9:.3f} s)" if used_missing else "")
+          + f"; node poses without a recorded grid: {grids_missing}")
+    if diffwhy:
+        for d_ in diffs:
+            print(f"  scan {d_[0]:8.3f} s  EKF x {d_[1]:6.2f}  cell xb {d_[2]:5.2f} yb {d_[3]:+5.2f}: "
+                  f"node {d_[4]:3d}, replay {d_[5]:3d}, replay floor evidence {d_[6]}")
+    invalid = "NOT VALID: the bag lacks scans the node built its map from; record again"
     print(f"E4a node grid against replay: {mism} differing cells over {n} grids -> "
-          f"{'PASS' if mism == 0 else 'FAIL'}; zone decision differs on {zone_disagree} scans")
-    print(f"E1  drivable without floor evidence or zone: {e1} -> {'PASS' if e1 == 0 else 'FAIL'}")
+          f"{('PASS' if mism == 0 else 'FAIL') if complete else invalid}; "
+          f"zone decision differs on {zone_disagree} scans")
+    print(f"E1  drivable without floor evidence or zone: {e1} -> "
+          f"{('PASS' if e1 == 0 else 'FAIL') if complete else invalid}")
     print(f"E2  drivable cells inside a true box: {e2} -> {'PASS' if e2 == 0 else 'FAIL'}")
     if e2why:
         d = np.array(drift)

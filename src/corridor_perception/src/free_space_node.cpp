@@ -46,7 +46,10 @@
 // Test support, /free_space/pose (geometry_msgs/PoseStamped, stamp of the scan),
 // so a checker can replay the scan bit for bit. NOT a pose message in the usual
 // sense: position = (x, y, theta) of the EKF pose used, theta in radians, and
-// orientation.x = 1 when the proximity zone was granted, else 0. And
+// orientation.x = 1 when the proximity zone was granted, else 0, and
+// orientation.y = how many scans the node has inserted so far, this one
+// included (1 for the first), so a checker can tell whether its recording
+// holds every scan the map was built from. And
 // /free_space/mount (std_msgs/Float64MultiArray): the sensor to base_link
 // rotation (row major, 9 values) and translation (3) this node used, as TF
 // delivered them. Nothing in the pipeline reads either.
@@ -367,6 +370,7 @@ private:
     used.pose.position.y = P.y;
     used.pose.position.z = P.theta;
     used.pose.orientation.x = zone_ok ? 1.0 : 0.0;
+    used.pose.orientation.y = static_cast<double>(scans_);
     pose_pub_->publish(used);
     std_msgs::msg::Float64MultiArray mount;
     mount.data = {R00, R01, R02, R10, R11, R12, R20, R21, R22, tr.x, tr.y, tr.z};
